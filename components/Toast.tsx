@@ -24,40 +24,34 @@ export const Toast: React.FC<ToastProps> = ({
 
   const bgColor = type === 'success' ? 'bg-green-600' : 'bg-red-600';
   
-  // Base classes
-  const baseClasses = `fixed z-[100] ${bgColor} text-white rounded shadow-2xl flex items-start gap-3 transition-all duration-300`;
-  
-  // Position classes
-  let positionClasses = '';
-  let containerClasses = '';
-
-  if (position === 'center') {
-    // For center, we want a modal-like appearance but auto-dismissing
-    containerClasses = "fixed inset-0 z-[100] flex items-center justify-center pointer-events-none"; // Container centers it
-    positionClasses = "pointer-events-auto max-w-lg p-6 text-lg border-2 border-white/20 animate-bounce-in"; // Box style
-  } else {
-    // Default top-right
-    positionClasses = "top-4 right-4 px-6 py-3 max-w-sm animate-slide-in";
-  }
-
-  const content = (
-    <div className={`${baseClasses} ${positionClasses}`}>
-      <span className="text-2xl">{type === 'success' ? '✅' : '⚠️'}</span>
-      <div className="flex-1">
-        <h4 className="font-bold mb-1">{type === 'success' ? 'Berhasil' : 'Peringatan'}</h4>
-        <p className="font-medium whitespace-pre-wrap leading-relaxed">{message}</p>
-      </div>
-      <button onClick={onClose} className="opacity-75 hover:opacity-100 text-xl font-bold p-1">✕</button>
-    </div>
-  );
-
+  // Render Center Toast (Modal Style)
   if (position === 'center') {
     return (
-      <div className={containerClasses}>
-        {content}
+      <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none bg-black/40 backdrop-blur-[2px]">
+        <div className={`pointer-events-auto ${bgColor} text-white rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.5)] flex flex-col items-center justify-center p-8 min-w-[320px] max-w-sm animate-bounce-in border-2 border-white/20 transform scale-100`}>
+          <div className="bg-white/20 p-4 rounded-full mb-4 backdrop-blur-sm shadow-inner">
+             <span className="text-5xl drop-shadow-md filter">{type === 'success' ? '✅' : '⚠️'}</span>
+          </div>
+          <h4 className="font-bold text-2xl mb-2 text-center drop-shadow-sm">
+             {type === 'success' ? 'Berhasil!' : 'Perhatian'}
+          </h4>
+          <p className="font-medium text-lg text-center leading-relaxed opacity-95">
+             {message}
+          </p>
+        </div>
       </div>
     );
   }
 
-  return content;
+  // Render Default Top-Right Toast
+  return (
+    <div className={`fixed z-[100] top-4 right-4 ${bgColor} text-white rounded shadow-2xl flex items-start gap-3 px-6 py-4 max-w-sm animate-slide-in transition-all duration-300 border border-white/10`}>
+      <span className="text-2xl">{type === 'success' ? '✅' : '⚠️'}</span>
+      <div className="flex-1">
+        <h4 className="font-bold mb-1 text-base">{type === 'success' ? 'Berhasil' : 'Peringatan'}</h4>
+        <p className="font-medium text-sm whitespace-pre-wrap leading-relaxed opacity-90">{message}</p>
+      </div>
+      <button onClick={onClose} className="opacity-75 hover:opacity-100 text-xl font-bold p-1 leading-none">✕</button>
+    </div>
+  );
 };

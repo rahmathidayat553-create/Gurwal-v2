@@ -65,7 +65,7 @@ export const CrudAnggotaGurwal: React.FC<CrudAnggotaGurwalProps> = ({ showToast 
   };
 
   // Logic to execute DB changes
-  const executeToggle = async (id_siswa: string, isAssigned: boolean) => {
+  const executeToggle = async (id_siswa: string, nama_siswa: string, isAssigned: boolean) => {
     try {
       if (isAssigned) {
         // Remove assignment
@@ -75,6 +75,8 @@ export const CrudAnggotaGurwal: React.FC<CrudAnggotaGurwalProps> = ({ showToast 
           .eq('id_guru', selectedGuru)
           .eq('id_siswa', id_siswa);
         if (error) throw error;
+        
+        showToast(`Berhasil menghapus ${nama_siswa} dari binaan`, 'success');
       } else {
         // Add assignment
         const { error } = await supabase
@@ -82,8 +84,8 @@ export const CrudAnggotaGurwal: React.FC<CrudAnggotaGurwalProps> = ({ showToast 
           .insert([{ id_guru: selectedGuru, id_siswa: id_siswa }]);
         if (error) throw error;
 
-        // Tambahkan Toast Sukses TEPAT DI TENGAH
-        showToast('Berhasil simpan anggota binaan', 'success', 2000, 'center');
+        // Tambahkan Toast Sukses TEPAT DI TENGAH dengan NAMA SISWA
+        showToast(`Berhasil menambahkan ${nama_siswa} ke binaan`, 'success', 2000, 'center');
         setSearchTerm(''); 
       }
       
@@ -112,14 +114,14 @@ export const CrudAnggotaGurwal: React.FC<CrudAnggotaGurwalProps> = ({ showToast 
       setPendingRemoval({ id: siswa.id, nama: siswa.nama });
     } else {
       // Jika belum assigned -> berarti ingin menambah
-      // Langsung eksekusi
-      executeToggle(siswa.id, false);
+      // Langsung eksekusi dengan NAMA
+      executeToggle(siswa.id, siswa.nama, false);
     }
   };
 
   const handleConfirmRemoval = () => {
     if (pendingRemoval) {
-      executeToggle(pendingRemoval.id, true); // true indicates "currently assigned", so logic will delete
+      executeToggle(pendingRemoval.id, pendingRemoval.nama, true); // true indicates "currently assigned", so logic will delete
       setPendingRemoval(null);
     }
   };

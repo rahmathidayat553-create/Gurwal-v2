@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GurWal - Sistem Informasi</title>
+    <title>GurWal - Sistem Informasi Guru Wali</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -20,6 +20,22 @@
                 border: '#374151', // Gray 700
                 text: '#F3F4F6', // Gray 100
                 muted: '#9CA3AF', // Gray 400
+              }
+            },
+            animation: {
+              'bounce-in': 'bounceIn 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55)',
+              'slide-in': 'slideIn 0.3s ease-out'
+            },
+            keyframes: {
+              bounceIn: {
+                '0%': { transform: 'scale(0.3)', opacity: '0' },
+                '50%': { transform: 'scale(1.05)', opacity: '1' },
+                '70%': { transform: 'scale(0.9)' },
+                '100%': { transform: 'scale(1)' },
+              },
+              slideIn: {
+                '0%': { transform: 'translateX(100%)', opacity: '0' },
+                '100%': { transform: 'translateX(0)', opacity: '1' },
               }
             }
           }

@@ -1,3 +1,4 @@
+
 export interface Guru {
   id: string;
   nip: string | null;
@@ -94,6 +95,16 @@ export interface Nilai {
   siswa?: Siswa;
 }
 
+export interface Sekolah {
+  id: string; // UUID
+  nama: string;
+  npsn: string | null;
+  alamat: string | null;
+  email: string | null;
+  no_telp: string | null;
+  logo_url: string | null;
+}
+
 export type ViewState = 
   // Admin
   | 'DASHBOARD' 
@@ -103,6 +114,7 @@ export type ViewState =
   | 'MAPEL'
   | 'ANGGOTA_GURWAL' 
   | 'DATA_PENGAJAR'
+  | 'PENGATURAN_SEKOLAH'
   // Unified Guru (Binaan + Pengajar)
   | 'GURU_DASHBOARD'
   | 'GURU_BINAAN_LIST'

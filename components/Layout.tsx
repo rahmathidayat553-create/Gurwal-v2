@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ViewState, Guru } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useSekolah } from '../hooks/useSekolah';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,6 +13,7 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentView, onChangeView, onLogout }) => {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const sekolah = useSekolah(); // Use centralized hook
 
   const adminMenu: { id: ViewState; label: string; icon: string }[] = [
     { id: 'DASHBOARD', label: 'Dashboard', icon: '🏠' },
@@ -21,6 +23,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentVi
     { id: 'MAPEL', label: 'Mata Pelajaran', icon: '📘' },
     { id: 'ANGGOTA_GURWAL', label: 'Anggota GurWal', icon: '🤝' },
     { id: 'DATA_PENGAJAR', label: 'Data Pengajar', icon: '📚' },
+    { id: 'PENGATURAN_SEKOLAH', label: 'Pengaturan Sekolah', icon: '🏫' },
   ];
 
   // Unified Guru Menu (Combines Wali & Pengajar)
@@ -47,15 +50,27 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentVi
       {/* Sidebar */}
       <aside className="w-64 bg-gray-800 shadow-md hidden md:flex flex-col border-r border-gray-700">
         <div className="p-6 border-b border-gray-700">
-          <h1 className="text-xl font-bold text-primary">GurWal System</h1>
-          <div className="mt-2">
-            <p className="text-sm font-semibold text-white">{currentUser?.nama}</p>
-            <p className="text-xs text-gray-400 mt-0.5">
+          <div className="flex items-center gap-3 mb-2">
+            {sekolah.logo_url ? (
+                <img src={sekolah.logo_url} alt="Logo" className="w-10 h-10 object-contain rounded bg-white/10 p-1" />
+            ) : (
+                <span className="text-3xl">🏫</span>
+            )}
+            <div>
+                 <h1 className="text-sm font-bold text-white uppercase leading-tight line-clamp-2">
+                    {sekolah.nama || 'GurWal System'}
+                 </h1>
+                 <p className="text-[10px] text-gray-400">Sistem Informasi</p>
+            </div>
+          </div>
+          <div className="mt-4 pt-4 border-t border-gray-700">
+            <p className="text-sm font-semibold text-white truncate">{currentUser?.nama}</p>
+            <p className="text-xs text-primary font-medium mt-0.5">
               {isAdmin ? 'Administrator' : 'Guru'}
             </p>
           </div>
         </div>
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
           {isAdmin ? (
             adminMenu.map((item) => (
               <button
@@ -113,8 +128,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentVi
       <main className="flex-1 flex flex-col overflow-hidden bg-gray-900">
         {/* Mobile Header */}
         <header className="bg-gray-800 shadow-sm md:hidden p-4 flex justify-between items-center z-10 border-b border-gray-700">
-          <h1 className="text-lg font-bold text-primary">GurWal</h1>
-          <button onClick={() => setShowLogoutConfirm(true)} className="text-sm text-red-400">Logout</button>
+          <div className="flex items-center gap-2">
+            {sekolah.logo_url && <img src={sekolah.logo_url} alt="Logo" className="w-8 h-8 object-contain rounded bg-white/10 p-1" />}
+            <h1 className="text-lg font-bold text-white truncate max-w-[200px]">{sekolah.nama || 'GurWal'}</h1>
+          </div>
+          <button onClick={() => setShowLogoutConfirm(true)} className="text-sm text-red-400 font-medium">Logout</button>
         </header>
         
         {/* Content Area */}
