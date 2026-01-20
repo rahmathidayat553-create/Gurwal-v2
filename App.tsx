@@ -16,6 +16,7 @@ import { GuruDashboard } from './components/GuruDashboard';
 // Binaan
 import { DaftarBinaan } from './components/GuruBinaan/DaftarBinaan';
 import { KehadiranBinaan } from './components/GuruBinaan/KehadiranBinaan';
+import { ImportKehadiranTemplate } from './components/GuruBinaan/ImportKehadiranTemplate';
 import { PelanggaranBinaan } from './components/GuruBinaan/PelanggaranBinaan';
 import { PrestasiBinaan } from './components/GuruBinaan/PrestasiBinaan';
 import { LaporanBinaan } from './components/GuruBinaan/LaporanBinaan';
@@ -131,6 +132,7 @@ function App() {
       // BINAAN (WALI)
       case 'GURU_BINAAN_LIST': return <DaftarBinaan currentUser={session} showToast={showToast} />;
       case 'GURU_BINAAN_KEHADIRAN': return <KehadiranBinaan currentUser={session} showToast={showToast} />;
+      case 'GURU_IMPORT_KEHADIRAN': return <ImportKehadiranTemplate currentUser={session} showToast={showToast} />;
       case 'GURU_BINAAN_PELANGGARAN': return <PelanggaranBinaan currentUser={session} showToast={showToast} />;
       case 'GURU_BINAAN_PRESTASI': return <PrestasiBinaan currentUser={session} showToast={showToast} />;
       case 'GURU_BINAAN_LAPORAN': return <LaporanBinaan currentUser={session} />;

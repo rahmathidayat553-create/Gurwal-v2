@@ -33,6 +33,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentVi
     { type: 'header', label: 'BINAAN (WALI KELAS)' },
     { type: 'link', id: 'GURU_BINAAN_LIST', label: 'Daftar Binaan', icon: '👩‍🎓' },
     { type: 'link', id: 'GURU_BINAAN_KEHADIRAN', label: 'Kehadiran', icon: '🗓️' },
+    { type: 'link', id: 'GURU_IMPORT_KEHADIRAN', label: 'Import Kehadiran (Custom)', icon: '📥' },
     { type: 'link', id: 'GURU_BINAAN_PELANGGARAN', label: 'Pelanggaran', icon: '⚠️' },
     { type: 'link', id: 'GURU_BINAAN_PRESTASI', label: 'Prestasi', icon: '🏅' },
     { type: 'link', id: 'GURU_BINAAN_LAPORAN', label: 'Laporan Binaan', icon: '📊' },
