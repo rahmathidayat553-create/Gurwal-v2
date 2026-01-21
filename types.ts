@@ -114,6 +114,7 @@ export type ViewState =
   | 'MAPEL'
   | 'ANGGOTA_GURWAL' 
   | 'DATA_PENGAJAR'
+  | 'REKAP_KEHADIRAN'
   | 'PENGATURAN_SEKOLAH'
   // Unified Guru (Binaan + Pengajar)
   | 'GURU_DASHBOARD'

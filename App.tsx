@@ -10,6 +10,7 @@ import { CrudMapel } from './components/CrudMapel';
 import { CrudAnggotaGurwal } from './components/CrudAnggotaGurwal';
 import { CrudDataPengajar } from './components/CrudDataPengajar';
 import { CrudSekolah } from './components/CrudSekolah';
+import { RekapKehadiranAdmin } from './components/RekapKehadiranAdmin';
 
 // Unified Guru Components
 import { GuruDashboard } from './components/GuruDashboard';
@@ -124,6 +125,7 @@ function App() {
       case 'ANGGOTA_GURWAL': return <CrudAnggotaGurwal showToast={showToast} />;
       case 'DATA_PENGAJAR': return <CrudDataPengajar showToast={showToast} />;
       case 'PENGATURAN_SEKOLAH': return <CrudSekolah showToast={showToast} />;
+      case 'REKAP_KEHADIRAN': return <RekapKehadiranAdmin showToast={showToast} />;
       case 'DASHBOARD': return <AdminDashboard />;
       
       // UNIFIED GURU

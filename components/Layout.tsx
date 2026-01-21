@@ -22,6 +22,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentVi
     { id: 'KELAS', label: 'Data Kelas', icon: '🏫' },
     { id: 'MAPEL', label: 'Mata Pelajaran', icon: '📘' },
     { id: 'ANGGOTA_GURWAL', label: 'Anggota GurWal', icon: '🤝' },
+    { id: 'REKAP_KEHADIRAN', label: 'Rekap Kehadiran', icon: '📊' },
     { id: 'DATA_PENGAJAR', label: 'Data Pengajar', icon: '📚' },
     { id: 'PENGATURAN_SEKOLAH', label: 'Pengaturan Sekolah', icon: '🏫' },
   ];
