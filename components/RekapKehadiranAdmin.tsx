@@ -30,6 +30,8 @@ interface HistoryRow {
     catatan: string;
 }
 
+type FilterTimeType = 'ALL' | 'MONTH' | 'RANGE';
+
 export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showToast }) => {
   const sekolah = useSekolah();
   
@@ -37,11 +39,16 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
   const [data, setData] = useState<RekapRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filter State
+  // Filter Data (Guru & Kelas)
   const [gurus, setGurus] = useState<Guru[]>([]);
   const [kelasOptions, setKelasOptions] = useState<Kelas[]>([]);
   const [selectedGuru, setSelectedGuru] = useState<string>('');
   const [selectedKelas, setSelectedKelas] = useState<string>('');
+
+  // Filter Waktu
+  const [filterType, setFilterType] = useState<FilterTimeType>('ALL');
+  const [selectedMonth, setSelectedMonth] = useState<string>(new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
   // Modal Detail State
   const [showModal, setShowModal] = useState(false);
@@ -59,8 +66,13 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
     };
 
     fetchOptions();
-    fetchData();
   }, []);
+
+  // Fetch Data Utama (Triggered saat filter waktu berubah)
+  useEffect(() => {
+    fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterType, selectedMonth, dateRange]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -87,16 +99,27 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
         });
       });
 
-      // 3. Get All Attendance Summaries
-      // Note: fetching all rows might be heavy for large datasets.
-      // Optimization: Fetch only id_siswa and status
-      const { data: kehadiranData } = await supabase
-        .from('kehadiran')
-        .select('id_siswa, status');
+      // 3. Get Attendance based on Time Filter
+      let query = supabase.from('kehadiran').select('id_siswa, status, tanggal');
+
+      if (filterType === 'MONTH' && selectedMonth) {
+          const [year, month] = selectedMonth.split('-');
+          // First day of month
+          const startDate = `${year}-${month}-01`;
+          // Last day of month
+          const endDate = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+          
+          query = query.gte('tanggal', startDate).lte('tanggal', endDate);
+      } else if (filterType === 'RANGE' && dateRange.start && dateRange.end) {
+          query = query.gte('tanggal', dateRange.start).lte('tanggal', dateRange.end);
+      }
+
+      const { data: kehadiranData, error: kehadiranError } = await query;
+      if (kehadiranError) throw kehadiranError;
       
       // Aggregate in memory
       const attendanceMap = new Map();
-      kehadiranData?.forEach(k => {
+      kehadiranData?.forEach((k: any) => {
           if (!attendanceMap.has(k.id_siswa)) {
               attendanceMap.set(k.id_siswa, { H: 0, S: 0, I: 0, A: 0 });
           }
@@ -121,7 +144,7 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
               nip_wali: wali.nip,
               // Hidden field for filtering purposes
               _id_guru: wali.id_guru, 
-              _id_kelas: s.kelas?.id, // Assuming join returns object, needed purely for filter logic if `kelas` param is ID not name
+              _id_kelas: s.kelas?.id, 
               hadir: stats.H,
               sakit: stats.S,
               izin: stats.I,
@@ -139,16 +162,28 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
     }
   };
 
-  // --- Filtering Logic ---
+  // --- Filtering Logic (Guru & Kelas) ---
   const filteredData = data.filter(row => {
       // @ts-ignore
       const matchGuru = selectedGuru === '' || row._id_guru === selectedGuru;
-      // Filter by Kelas Name (since we displayed Name) or match logic with option.
+      // Filter by Kelas Name
       const selectedClassObj = kelasOptions.find(k => k.id === selectedKelas);
       const matchKelas = selectedKelas === '' || row.kelas === selectedClassObj?.nama;
       
       return matchGuru && matchKelas;
   });
+
+  // --- Helper: Get Period String ---
+  const getPeriodString = () => {
+      if (filterType === 'MONTH') {
+          const date = new Date(selectedMonth + '-01');
+          return `Bulan: ${date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`;
+      }
+      if (filterType === 'RANGE') {
+          return `Periode: ${dateRange.start} s/d ${dateRange.end}`;
+      }
+      return 'Semua Waktu';
+  };
 
   // --- VIEW DETAILS LOGIC ---
   const handleViewDetails = async (student: RekapRow) => {
@@ -158,11 +193,23 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
       setStudentHistory([]);
 
       try {
-          const { data, error } = await supabase
+          let query = supabase
             .from('kehadiran')
             .select('*')
             .eq('id_siswa', student.id_siswa)
             .order('tanggal', { ascending: false });
+
+          // Apply same time filters to history
+          if (filterType === 'MONTH' && selectedMonth) {
+                const [year, month] = selectedMonth.split('-');
+                const startDate = `${year}-${month}-01`;
+                const endDate = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0];
+                query = query.gte('tanggal', startDate).lte('tanggal', endDate);
+          } else if (filterType === 'RANGE' && dateRange.start && dateRange.end) {
+                query = query.gte('tanggal', dateRange.start).lte('tanggal', dateRange.end);
+          }
+
+          const { data, error } = await query;
           
           if (error) throw error;
           // @ts-ignore
@@ -191,7 +238,8 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
         'Hadir': row.hadir,
         'Sakit': row.sakit,
         'Izin': row.izin,
-        'Alpha': row.alpha
+        'Alpha': row.alpha,
+        'Periode': getPeriodString()
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -211,7 +259,8 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
     doc.setFontSize(12);
     doc.text(`${sekolah.nama || 'Sekolah'}`, 105, 22, { align: 'center' });
     doc.setFontSize(10);
-    doc.text(`Dicetak pada: ${new Date().toLocaleDateString('id-ID')}`, 105, 28, { align: 'center' });
+    doc.text(getPeriodString(), 105, 28, { align: 'center' });
+    doc.text(`Dicetak pada: ${new Date().toLocaleDateString('id-ID')}`, 105, 34, { align: 'center' });
 
     const tableColumn = ["No", "Nama Siswa", "NISN", "Kelas", "Wali Kelas", "H", "S", "I", "A"];
     const tableRows: any[] = [];
@@ -234,7 +283,7 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
     autoTable(doc, {
         head: [tableColumn],
         body: tableRows,
-        startY: 35,
+        startY: 40,
         theme: 'grid',
         styles: { fontSize: 8 },
         headStyles: { fillColor: [79, 70, 229] } // Indigo-600
@@ -272,6 +321,11 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
     doc.text("LAPORAN KEHADIRAN SISWA", pageWidth / 2, yPos, { align: "center" });
+    
+    yPos += 7;
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "italic");
+    doc.text(getPeriodString(), pageWidth / 2, yPos, { align: "center" });
 
     yPos += 15;
     doc.setFontSize(11);
@@ -354,29 +408,83 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 mb-6 flex flex-col md:flex-row gap-4">
-        <div className="flex-1">
-            <label className="text-gray-400 text-sm mb-1 block">Filter Guru Wali</label>
-            <select 
-                value={selectedGuru}
-                onChange={(e) => setSelectedGuru(e.target.value)}
-                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-            >
-                <option value="">Semua Guru</option>
-                {gurus.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
-            </select>
+      {/* Main Filter Section */}
+      <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 mb-6 space-y-4">
+        
+        {/* Row 1: Filter Waktu */}
+        <div className="pb-4 border-b border-gray-700">
+             <label className="text-white text-sm font-bold mb-2 block">📅 Filter Waktu Kehadiran</label>
+             <div className="flex flex-col md:flex-row gap-4">
+                <div className="w-full md:w-1/4">
+                    <select
+                        value={filterType}
+                        onChange={(e) => setFilterType(e.target.value as FilterTimeType)}
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white font-medium"
+                    >
+                        <option value="ALL">Semua Waktu</option>
+                        <option value="MONTH">Per Bulan</option>
+                        <option value="RANGE">Rentang Tanggal (Custom)</option>
+                    </select>
+                </div>
+
+                {filterType === 'MONTH' && (
+                    <div className="w-full md:w-1/4">
+                        <input
+                            type="month"
+                            value={selectedMonth}
+                            onChange={(e) => setSelectedMonth(e.target.value)}
+                            className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                        />
+                    </div>
+                )}
+
+                {filterType === 'RANGE' && (
+                    <div className="flex flex-1 gap-2 items-center">
+                        <input
+                            type="date"
+                            value={dateRange.start}
+                            onChange={(e) => setDateRange({...dateRange, start: e.target.value})}
+                            className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                        />
+                        <span className="text-gray-400">-</span>
+                        <input
+                            type="date"
+                            value={dateRange.end}
+                            onChange={(e) => setDateRange({...dateRange, end: e.target.value})}
+                            className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                        />
+                    </div>
+                )}
+             </div>
+             <p className="text-xs text-gray-400 mt-2">
+                * Data yang ditampilkan (H/S/I/A) akan dihitung ulang berdasarkan filter waktu yang dipilih.
+             </p>
         </div>
-        <div className="flex-1">
-            <label className="text-gray-400 text-sm mb-1 block">Filter Kelas</label>
-            <select 
-                value={selectedKelas}
-                onChange={(e) => setSelectedKelas(e.target.value)}
-                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
-            >
-                <option value="">Semua Kelas</option>
-                {kelasOptions.map(k => <option key={k.id} value={k.id}>{k.nama}</option>)}
-            </select>
+
+        {/* Row 2: Filter Data */}
+        <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1">
+                <label className="text-gray-400 text-sm mb-1 block">Filter Guru Wali</label>
+                <select 
+                    value={selectedGuru}
+                    onChange={(e) => setSelectedGuru(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                >
+                    <option value="">Semua Guru</option>
+                    {gurus.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                </select>
+            </div>
+            <div className="flex-1">
+                <label className="text-gray-400 text-sm mb-1 block">Filter Kelas</label>
+                <select 
+                    value={selectedKelas}
+                    onChange={(e) => setSelectedKelas(e.target.value)}
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
+                >
+                    <option value="">Semua Kelas</option>
+                    {kelasOptions.map(k => <option key={k.id} value={k.id}>{k.nama}</option>)}
+                </select>
+            </div>
         </div>
       </div>
 
@@ -423,7 +531,7 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
                             </tr>
                         ))}
                         {filteredData.length === 0 && (
-                            <tr><td colSpan={10} className="p-6 text-center text-gray-500">Data tidak ditemukan.</td></tr>
+                            <tr><td colSpan={10} className="p-6 text-center text-gray-500">Data tidak ditemukan pada periode/filter ini.</td></tr>
                         )}
                     </tbody>
                 </table>
@@ -439,6 +547,7 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
                     <div>
                         <h3 className="text-2xl font-bold text-white mb-1">{selectedStudent.nama_siswa}</h3>
                         <p className="text-gray-400 text-sm">{selectedStudent.nisn} | Kelas: {selectedStudent.kelas} | Wali: {selectedStudent.nama_wali}</p>
+                        <p className="text-blue-400 text-xs mt-1 font-bold">{getPeriodString()}</p>
                     </div>
                     <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
                 </div>
@@ -492,7 +601,7 @@ export const RekapKehadiranAdmin: React.FC<RekapKehadiranAdminProps> = ({ showTo
                                     </tr>
                                 ))}
                                 {studentHistory.length === 0 && (
-                                    <tr><td colSpan={3} className="p-4 text-center text-sm text-gray-500">Tidak ada riwayat kehadiran tercatat.</td></tr>
+                                    <tr><td colSpan={3} className="p-4 text-center text-sm text-gray-500">Tidak ada riwayat kehadiran tercatat pada periode ini.</td></tr>
                                 )}
                             </tbody>
                         </table>

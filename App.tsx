@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from './supabaseClient'; // Added import
 import { Layout } from './components/Layout';
 import { Login } from './components/Login';
 // Admin Components
@@ -11,6 +12,7 @@ import { CrudAnggotaGurwal } from './components/CrudAnggotaGurwal';
 import { CrudDataPengajar } from './components/CrudDataPengajar';
 import { CrudSekolah } from './components/CrudSekolah';
 import { RekapKehadiranAdmin } from './components/RekapKehadiranAdmin';
+import { InputKehadiranAdmin } from './components/InputKehadiranAdmin'; 
 
 // Unified Guru Components
 import { GuruDashboard } from './components/GuruDashboard';
@@ -64,6 +66,43 @@ function App() {
       }
     }
   }, []);
+
+  // GLOBAL REALTIME ACTIVITY NOTIFICATION (Only for ADMIN)
+  useEffect(() => {
+    if (session?.peran === 'ADMIN') {
+       const channel = supabase
+        .channel('global_toast_activity')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'kehadiran' }, async (payload) => {
+            // Fetch detailed info for the toast message
+            // payload.new contains the raw inserted row
+            const { data } = await supabase
+              .from('kehadiran')
+              .select('status, guru(nama), siswa(nama)')
+              .eq('id', payload.new.id)
+              .single();
+
+            if (data) {
+                // @ts-ignore
+                const guruName = data.guru?.nama || 'Seorang Guru';
+                // @ts-ignore
+                const siswaName = data.siswa?.nama || 'Siswa';
+                const status = data.status;
+
+                // Trigger Toast
+                showToast(
+                    `🔔 Aktivitas Baru:\n${guruName} menginput ${siswaName} (${status})`, 
+                    'success', 
+                    5000
+                );
+            }
+        })
+        .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }
+  }, [session]);
 
   const handleLoginSuccess = (user: Guru) => {
     setSession(user);
@@ -125,6 +164,7 @@ function App() {
       case 'ANGGOTA_GURWAL': return <CrudAnggotaGurwal showToast={showToast} />;
       case 'DATA_PENGAJAR': return <CrudDataPengajar showToast={showToast} />;
       case 'PENGATURAN_SEKOLAH': return <CrudSekolah showToast={showToast} />;
+      case 'INPUT_KEHADIRAN_ADMIN': return <InputKehadiranAdmin currentUser={session} showToast={showToast} />; 
       case 'REKAP_KEHADIRAN': return <RekapKehadiranAdmin showToast={showToast} />;
       case 'DASHBOARD': return <AdminDashboard />;
       
