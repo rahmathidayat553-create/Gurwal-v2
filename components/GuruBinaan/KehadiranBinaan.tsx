@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 import { Guru, Bimbingan, Kehadiran } from '../../types';
@@ -17,6 +18,12 @@ interface FormState {
   };
 }
 
+// Tipe Info Libur
+interface HolidayInfo {
+  jenis: string;
+  keterangan: string | null;
+}
+
 type ModeType = 'INPUT' | 'VIEW' | 'EDIT';
 
 export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => {
@@ -31,45 +38,130 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   const [processing, setProcessing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // 1. Fetch Daftar Siswa (Sekali saat mount)
+  // State Hari Libur & Sekolah & Masa Depan
+  const [isHoliday, setIsHoliday] = useState(false);
+  const [holidayInfo, setHolidayInfo] = useState<HolidayInfo | null>(null);
+  const [hariSekolah, setHariSekolah] = useState<number>(5); // Default 5 hari
+
+  // Variable Today untuk batasan
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // 1. Fetch Daftar Siswa & Setting Sekolah (Sekali saat mount)
   useEffect(() => {
-    const fetchSiswa = async () => {
+    const fetchInitialData = async () => {
       setLoading(true);
-      const { data, error } = await supabase
+      
+      // Fetch Siswa
+      const siswaPromise = supabase
         .from('bimbingan')
         .select('*, siswa(id, nama, nisn, jenis_kelamin, kelas(nama))')
         .eq('id_guru', currentUser.id)
         .order('created_at', { ascending: true });
-        
-      if (!error && data) {
+
+      // Fetch Setting Sekolah
+      const sekolahPromise = supabase
+        .from('sekolah')
+        .select('hari_sekolah')
+        .limit(1)
+        .maybeSingle();
+
+      const [siswaRes, sekolahRes] = await Promise.all([siswaPromise, sekolahPromise]);
+
+      if (siswaRes.data) {
          // @ts-ignore
-         setSiswaList(data);
+         setSiswaList(siswaRes.data);
       }
+      if (sekolahRes.data) {
+         setHariSekolah(sekolahRes.data.hari_sekolah);
+      }
+
       setLoading(false);
     };
-    fetchSiswa();
+    fetchInitialData();
   }, [currentUser.id]);
 
-  // 2. Fetch Kehadiran saat Tanggal Berubah
+  // 2. Fetch Kehadiran & Cek Libur saat Tanggal/Siswa/HariSekolah Berubah
   useEffect(() => {
     if (siswaList.length > 0) {
-      fetchKehadiran();
+      fetchDataAndCheckHoliday();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tanggal, siswaList]);
+  }, [tanggal, siswaList, hariSekolah]);
 
-  const fetchKehadiran = async () => {
+  const fetchDataAndCheckHoliday = async () => {
     setLoading(true);
-    setMode('INPUT'); // Reset asumsi awal ke INPUT
+    setMode('INPUT'); 
+    setIsHoliday(false);
+    setHolidayInfo(null);
 
     try {
-      const { data } = await supabase
-        .from('kehadiran')
-        .select('*')
-        .eq('id_guru', currentUser.id)
-        .eq('tanggal', tanggal);
+      // --- PRIORITY 1: CEK TANGGAL MASA DEPAN ---
+      if (tanggal > todayStr) {
+          setIsHoliday(true);
+          setHolidayInfo({
+              jenis: 'FUTURE_DATE',
+              keterangan: 'Tanggal Masa Depan (Belum dapat diisi)'
+          });
+          setLoading(false);
+          return; // Stop here, no need to fetch DB
+      }
 
-      const existingData = data as Kehadiran[] || [];
+      // --- PRIORITY 2: CEK HARI SEKOLAH (SENIN-JUMAT / SABTU) ---
+      const dateObj = new Date(tanggal);
+      const dayOfWeek = dateObj.getDay(); // 0=Minggu, 6=Sabtu
+      
+      let isWeekend = false;
+      let weekendLabel = '';
+
+      if (dayOfWeek === 0) {
+          isWeekend = true;
+          weekendLabel = 'Hari Minggu';
+      } else if (hariSekolah === 5 && dayOfWeek === 6) {
+          isWeekend = true;
+          weekendLabel = 'Hari Sabtu (Sekolah 5 Hari Kerja)';
+      }
+
+      if (isWeekend) {
+          setIsHoliday(true);
+          setHolidayInfo({ 
+              jenis: 'HARI_NON_AKTIF', 
+              keterangan: weekendLabel 
+          });
+          // Lanjut fetch data (mungkin ada data historis salah input yg mau dilihat)
+      }
+
+      // Parallel Request: Cek Kehadiran & Cek Kalender Pendidikan
+      const queries: any[] = [
+        supabase
+          .from('kehadiran')
+          .select('*')
+          .eq('id_guru', currentUser.id)
+          .eq('tanggal', tanggal)
+      ];
+
+      // Hanya query kalender jika belum terdeteksi weekend
+      if (!isWeekend) {
+          queries.push(
+            supabase
+              .from('kalender_pendidikan')
+              .select('jenis, keterangan')
+              .eq('tanggal', tanggal)
+              .maybeSingle()
+          );
+      }
+
+      const results = await Promise.all(queries);
+      const kehadiranRes = results[0];
+      const kalenderRes = results[1]; // Undefined jika isWeekend=true
+
+      // --- PRIORITY 3: CEK KALENDER PENDIDIKAN ---
+      if (!isWeekend && kalenderRes?.data) {
+        setIsHoliday(true);
+        setHolidayInfo(kalenderRes.data);
+      }
+
+      // 3. Handle Data Kehadiran
+      const existingData = kehadiranRes.data as Kehadiran[] || [];
       const newFormState: FormState = {};
 
       if (existingData.length > 0) {
@@ -85,7 +177,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
               catatan: record.catatan || ''
             };
           } else {
-            // Jika siswa baru masuk tapi data tanggal tsb sudah ada, default hadir
             newFormState[item.id_siswa] = { status: 'HADIR', catatan: '' };
           }
         });
@@ -101,7 +192,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
     } catch (error) {
       console.error(error);
-      showToast('Gagal memuat data kehadiran', 'error');
+      showToast('Gagal memuat data', 'error');
     } finally {
       setLoading(false);
     }
@@ -110,6 +201,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   // --- Handlers ---
 
   const handleStatusChange = (id_siswa: string, val: 'HADIR' | 'SAKIT' | 'IZIN' | 'ALPHA') => {
+    if (isHoliday) return; // Prevent change if holiday/future
     setFormData(prev => ({
       ...prev,
       [id_siswa]: { ...prev[id_siswa], status: val }
@@ -117,6 +209,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleCatatanChange = (id_siswa: string, val: string) => {
+    if (isHoliday) return; // Prevent change if holiday/future
     setFormData(prev => ({
       ...prev,
       [id_siswa]: { ...prev[id_siswa], catatan: val }
@@ -124,6 +217,12 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleSave = async () => {
+    // VALIDASI FINAL SEBELUM SAVE
+    if (isHoliday) {
+        showToast(`Gagal: ${holidayInfo?.keterangan || 'Hari Libur / Masa Depan'}.`, 'error');
+        return;
+    }
+
     setProcessing(true);
     try {
       const payload = siswaList.map(item => ({
@@ -138,7 +237,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       if (error) throw error;
 
       showToast('✅ Kehadiran berhasil disimpan', 'success');
-      await fetchKehadiran(); // Refresh ke mode VIEW
+      await fetchDataAndCheckHoliday(); // Refresh ke mode VIEW
     } catch (e) {
       showToast('Gagal menyimpan data', 'error');
     } finally {
@@ -147,6 +246,12 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleUpdate = async () => {
+    // VALIDASI FINAL SEBELUM UPDATE
+    if (isHoliday) {
+        showToast(`Gagal: ${holidayInfo?.keterangan || 'Hari Libur / Masa Depan'}.`, 'error');
+        return;
+    }
+
     setProcessing(true);
     try {
       // Upsert: Jika ID ada (update), jika tidak (insert - kasus siswa baru)
@@ -166,7 +271,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       if (error) throw error;
 
       showToast('✅ Kehadiran berhasil diperbarui', 'success');
-      await fetchKehadiran(); // Kembali ke mode VIEW
+      await fetchDataAndCheckHoliday(); // Kembali ke mode VIEW
     } catch (e) {
       showToast('Gagal memperbarui data', 'error');
     } finally {
@@ -175,6 +280,12 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleDelete = async () => {
+    // Validasi Delete: Tidak boleh hapus masa depan (meskipun datanya anehnya ada)
+    if (tanggal > todayStr) {
+        showToast('Tidak dapat menghapus data masa depan.', 'error');
+        return;
+    }
+
     setProcessing(true);
     try {
       const { error } = await supabase
@@ -187,7 +298,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
       showToast('🗑️ Data kehadiran dihapus', 'success');
       setShowDeleteConfirm(false);
-      await fetchKehadiran(); // Kembali ke mode INPUT
+      await fetchDataAndCheckHoliday(); // Kembali ke mode INPUT
     } catch (e) {
       showToast('Gagal menghapus data', 'error');
     } finally {
@@ -199,15 +310,15 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
   const RadioButton = ({ id_siswa, val, label, colorClass }: any) => {
     const isSelected = formData[id_siswa]?.status === val;
-    const isDisabled = mode === 'VIEW'; // Disabled only in VIEW mode
+    const isDisabled = mode === 'VIEW' || isHoliday; // Disabled if VIEW mode OR Holiday/Future
 
     return (
       <label className={`
-        relative flex items-center justify-center w-10 h-10 rounded-lg cursor-pointer transition-all duration-200
+        relative flex items-center justify-center w-10 h-10 rounded-lg transition-all duration-200
         ${isSelected 
           ? `${colorClass} text-white shadow-lg scale-110 font-bold ring-2 ring-white` 
-          : 'bg-gray-700 text-gray-400 hover:bg-gray-600 border border-gray-600'}
-        ${isDisabled ? 'cursor-default opacity-80' : 'cursor-pointer'}
+          : 'bg-gray-700 text-gray-400 border border-gray-600'}
+        ${isDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-gray-600'}
       `}>
         <input
           type="radio"
@@ -241,90 +352,125 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
       {/* --- CONTROL PANEL (Sticky) --- */}
       <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow-xl mb-6 sticky top-0 z-20">
-        <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
-          
-          {/* Date Picker & Badge */}
-          <div className="flex items-center gap-4 w-full lg:w-auto">
-            <div className="relative">
-                <input
-                  type="date"
-                  value={tanggal}
-                  onChange={(e) => setTanggal(e.target.value)}
-                  className="bg-gray-900 border border-gray-600 text-white rounded-lg px-4 py-2 pl-10 focus:ring-2 focus:ring-primary focus:border-transparent shadow-inner"
-                />
-                <span className="absolute left-3 top-2.5 text-gray-400">📅</span>
+        <div className="flex flex-col gap-4">
+            <div className="flex flex-col lg:flex-row justify-between items-center gap-4">
+            
+            {/* Date Picker & Badge */}
+            <div className="flex items-center gap-4 w-full lg:w-auto">
+                <div className="relative">
+                    <input
+                    type="date"
+                    value={tanggal}
+                    max={todayStr} // Prevent selecting future dates via UI
+                    onChange={(e) => setTanggal(e.target.value)}
+                    className="bg-gray-900 border border-gray-600 text-white rounded-lg px-4 py-2 pl-10 focus:ring-2 focus:ring-primary focus:border-transparent shadow-inner"
+                    />
+                    <span className="absolute left-3 top-2.5 text-gray-400">📅</span>
+                </div>
+
+                {/* Mode Badge */}
+                {mode === 'INPUT' && !isHoliday && (
+                <span className="px-3 py-1 bg-green-500/20 text-green-400 border border-green-500/50 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse">
+                    Mode Input
+                </span>
+                )}
+                {mode === 'VIEW' && !isHoliday && (
+                <span className="px-3 py-1 bg-blue-500/20 text-blue-400 border border-blue-500/50 rounded-full text-xs font-bold uppercase tracking-wider">
+                    Mode Lihat
+                </span>
+                )}
+                {mode === 'EDIT' && !isHoliday && (
+                <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse">
+                    Mode Edit
+                </span>
+                )}
+                {isHoliday && (
+                    <span className={`px-3 py-1 text-xs font-bold uppercase tracking-wider rounded-full border ${
+                        holidayInfo?.jenis === 'FUTURE_DATE' 
+                        ? 'bg-gray-700 text-gray-400 border-gray-500' 
+                        : 'bg-red-500/20 text-red-400 border-red-500/50 animate-pulse'
+                    }`}>
+                        ⛔ {holidayInfo?.jenis === 'HARI_NON_AKTIF' ? 'HARI LIBUR' : holidayInfo?.jenis === 'FUTURE_DATE' ? 'MASA DEPAN' : 'LIBUR NASIONAL'}
+                    </span>
+                )}
             </div>
 
-            {/* Mode Badge */}
-            {mode === 'INPUT' && (
-              <span className="px-3 py-1 bg-green-500/20 text-green-400 border border-green-500/50 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse">
-                Mode Input
-              </span>
-            )}
-            {mode === 'VIEW' && (
-              <span className="px-3 py-1 bg-blue-500/20 text-blue-400 border border-blue-500/50 rounded-full text-xs font-bold uppercase tracking-wider">
-                Mode Lihat
-              </span>
-            )}
-            {mode === 'EDIT' && (
-              <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 rounded-full text-xs font-bold uppercase tracking-wider animate-pulse">
-                Mode Edit
-              </span>
-            )}
-          </div>
+            {/* Action Buttons based on Mode */}
+            <div className="flex gap-2 w-full lg:w-auto justify-end">
+                
+                {/* 1. Jika Mode INPUT (Belum ada data) */}
+                {mode === 'INPUT' && (
+                <button
+                    onClick={handleSave}
+                    disabled={processing || siswaList.length === 0 || isHoliday}
+                    className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    {processing ? 'Menyimpan...' : '💾 Simpan Kehadiran'}
+                </button>
+                )}
 
-          {/* Action Buttons based on Mode */}
-          <div className="flex gap-2 w-full lg:w-auto justify-end">
-            
-            {/* 1. Jika Mode INPUT (Belum ada data) */}
-            {mode === 'INPUT' && (
-              <button
-                onClick={handleSave}
-                disabled={processing || siswaList.length === 0}
-                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition flex items-center gap-2 disabled:opacity-50"
-              >
-                {processing ? 'Menyimpan...' : '💾 Simpan Kehadiran'}
-              </button>
-            )}
+                {/* 2. Jika Mode VIEW (Data ada, hanya lihat) */}
+                {mode === 'VIEW' && (
+                <>
+                    <button
+                        onClick={() => setShowDeleteConfirm(true)}
+                        disabled={isHoliday && holidayInfo?.jenis === 'FUTURE_DATE'} // Disable hapus jika future date
+                        className="bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800 px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        🗑️ Hapus
+                    </button>
+                    {!isHoliday && (
+                        <button
+                            onClick={() => setMode('EDIT')}
+                            className="bg-yellow-600 hover:bg-yellow-700 text-white px-5 py-2 rounded-lg font-bold shadow-lg transition flex items-center gap-2"
+                        >
+                            ✏️ Ubah Data
+                        </button>
+                    )}
+                </>
+                )}
 
-            {/* 2. Jika Mode VIEW (Data ada, hanya lihat) */}
-            {mode === 'VIEW' && (
-              <>
-                <button
-                  onClick={() => setShowDeleteConfirm(true)}
-                  className="bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800 px-4 py-2 rounded-lg font-medium transition flex items-center gap-2"
-                >
-                  🗑️ Hapus
-                </button>
-                <button
-                  onClick={() => setMode('EDIT')}
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-5 py-2 rounded-lg font-bold shadow-lg transition flex items-center gap-2"
-                >
-                  ✏️ Ubah Data
-                </button>
-              </>
-            )}
+                {/* 3. Jika Mode EDIT (Sedang mengedit) */}
+                {mode === 'EDIT' && (
+                <>
+                    <button
+                        onClick={() => { setMode('VIEW'); fetchDataAndCheckHoliday(); }} 
+                        className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg font-medium transition"
+                        disabled={processing}
+                    >
+                        ❌ Batal
+                    </button>
+                    <button
+                        onClick={handleUpdate}
+                        disabled={processing || isHoliday}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition flex items-center gap-2 disabled:opacity-50"
+                    >
+                        {processing ? 'Memproses...' : '✅ Perbarui Kehadiran'}
+                    </button>
+                </>
+                )}
+            </div>
+            </div>
 
-            {/* 3. Jika Mode EDIT (Sedang mengedit) */}
-            {mode === 'EDIT' && (
-              <>
-                <button
-                  onClick={() => { setMode('VIEW'); fetchKehadiran(); }} // Cancel reverts to VIEW & refetches
-                  className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg font-medium transition"
-                  disabled={processing}
-                >
-                  ❌ Batal
-                </button>
-                <button
-                  onClick={handleUpdate}
-                  disabled={processing}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition flex items-center gap-2 disabled:opacity-50"
-                >
-                  {processing ? 'Memproses...' : '✅ Perbarui Kehadiran'}
-                </button>
-              </>
+            {/* ALERT HARI LIBUR / FUTURE */}
+            {isHoliday && holidayInfo && (
+                <div className={`w-full p-3 rounded-lg flex items-start gap-3 animate-slide-in border ${
+                    holidayInfo.jenis === 'FUTURE_DATE' 
+                    ? 'bg-gray-700/50 border-gray-600 text-gray-300' 
+                    : 'bg-red-900/30 border-red-600/50 text-red-200'
+                }`}>
+                    <span className="text-2xl">{holidayInfo.jenis === 'FUTURE_DATE' ? '⏳' : '🚫'}</span>
+                    <div>
+                        <h4 className={`font-bold ${holidayInfo.jenis === 'FUTURE_DATE' ? 'text-gray-200' : 'text-red-100'}`}>
+                            {holidayInfo.jenis === 'FUTURE_DATE' ? 'Tanggal Belum Dapat Diisi' : 'Tidak dapat menginput kehadiran'}
+                        </h4>
+                        <p className="text-sm">
+                            Status: <strong>{holidayInfo.jenis === 'FUTURE_DATE' ? 'Masa Depan' : holidayInfo.jenis.replace(/_/g, ' ')}</strong>.
+                            {holidayInfo.keterangan && <span className="block mt-1 italic opacity-80">"{holidayInfo.keterangan}"</span>}
+                        </p>
+                    </div>
+                </div>
             )}
-          </div>
         </div>
       </div>
 
@@ -353,6 +499,9 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
                   if (currentStatus === 'SAKIT') rowBg = 'bg-yellow-900/10 hover:bg-yellow-900/20';
                   if (currentStatus === 'IZIN') rowBg = 'bg-blue-900/10 hover:bg-blue-900/20';
                   if (currentStatus === 'ALPHA') rowBg = 'bg-red-900/10 hover:bg-red-900/20';
+                  
+                  // Dimmed row if holiday
+                  if (isHoliday) rowBg = 'bg-gray-900 opacity-60';
 
                   return (
                     <tr key={item.id} className={`transition-colors duration-200 ${rowBg}`}>
@@ -395,11 +544,12 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
                           value={formData[item.id_siswa]?.catatan || ''}
                           onChange={(e) => handleCatatanChange(item.id_siswa, e.target.value)}
                           placeholder={mode === 'VIEW' ? "" : "Keterangan tambahan..."}
-                          disabled={mode === 'VIEW'}
+                          disabled={mode === 'VIEW' || isHoliday}
                           className={`
                             w-full bg-gray-900 border border-gray-600 text-white text-sm rounded-lg px-3 py-2
                             focus:ring-1 focus:ring-primary focus:border-primary transition
                             disabled:opacity-50 disabled:bg-gray-800 disabled:border-transparent
+                            disabled:cursor-not-allowed
                           `}
                         />
                       </td>

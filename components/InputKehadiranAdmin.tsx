@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { Guru, Siswa, Kelas, Kehadiran } from '../types';
@@ -14,6 +15,11 @@ interface AttendanceFormState {
     status: 'HADIR' | 'SAKIT' | 'IZIN' | 'ALPHA' | null;
     catatan: string;
   };
+}
+
+interface HolidayInfo {
+  jenis: string;
+  keterangan: string | null;
 }
 
 export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast }) => {
@@ -37,13 +43,23 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // 1. Fetch Class Options
+  // Validation State
+  const [hariSekolah, setHariSekolah] = useState<number>(5);
+  const [isHoliday, setIsHoliday] = useState(false);
+  const [holidayInfo, setHolidayInfo] = useState<HolidayInfo | null>(null);
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // 1. Fetch Class Options & School Settings
   useEffect(() => {
-    const fetchKelas = async () => {
-      const { data } = await supabase.from('kelas').select('*').order('nama');
-      if (data) setKelasOptions(data);
+    const fetchInitial = async () => {
+      const { data: k } = await supabase.from('kelas').select('*').order('nama');
+      if (k) setKelasOptions(k);
+
+      const { data: s } = await supabase.from('sekolah').select('hari_sekolah').limit(1).maybeSingle();
+      if (s) setHariSekolah(s.hari_sekolah);
     };
-    fetchKelas();
+    fetchInitial();
   }, []);
 
   // 2. Fetch Students when Class, Page, or RowsPerPage changes
@@ -58,13 +74,63 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKelas, currentPage, rowsPerPage]);
 
-  // 3. Fetch Attendance when Date or Student List changes
+  // 3. Check Validity & Fetch Attendance when Date or Student List changes
   useEffect(() => {
     if (siswaList.length > 0 && selectedKelas) {
-      fetchKehadiran();
+      validateDateAndFetch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tanggal, siswaList]);
+  }, [tanggal, siswaList, hariSekolah]);
+
+  const validateDateAndFetch = async () => {
+      // RESET STATE
+      setIsHoliday(false);
+      setHolidayInfo(null);
+      setIsEditing(false); // Reset edit mode on date change
+
+      // --- VALIDASI 1: TANGGAL MASA DEPAN ---
+      if (tanggal > todayStr) {
+          setIsHoliday(true);
+          setHolidayInfo({ jenis: 'FUTURE_DATE', keterangan: 'Tanggal Masa Depan (Belum dapat diisi)' });
+          // Walaupun masa depan, kita coba fetch data (siapa tau ada data aneh masuk)
+          await fetchKehadiran(); 
+          return;
+      }
+
+      // --- VALIDASI 2: HARI SEKOLAH ---
+      const dateObj = new Date(tanggal);
+      const dayOfWeek = dateObj.getDay(); // 0=Minggu, 6=Sabtu
+      
+      if (dayOfWeek === 0) {
+          setIsHoliday(true);
+          setHolidayInfo({ jenis: 'HARI_NON_AKTIF', keterangan: 'Hari Minggu' });
+      } else if (hariSekolah === 5 && dayOfWeek === 6) {
+          setIsHoliday(true);
+          setHolidayInfo({ jenis: 'HARI_NON_AKTIF', keterangan: 'Hari Sabtu (Sekolah 5 Hari Kerja)' });
+      }
+
+      // Jika sudah terdeteksi libur sekolah, lanjut fetch kehadiran (mode view only)
+      if (dayOfWeek === 0 || (hariSekolah === 5 && dayOfWeek === 6)) {
+          await fetchKehadiran();
+          return;
+      }
+
+      // --- VALIDASI 3: KALENDER PENDIDIKAN ---
+      // Cek DB untuk hari libur nasional dll
+      const { data: libur } = await supabase
+          .from('kalender_pendidikan')
+          .select('jenis, keterangan')
+          .eq('tanggal', tanggal)
+          .maybeSingle();
+
+      if (libur) {
+          setIsHoliday(true);
+          setHolidayInfo(libur);
+      }
+
+      // Akhirnya fetch data kehadiran
+      await fetchKehadiran();
+  };
 
   const handleClassChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
       setSelectedKelas(e.target.value);
@@ -83,12 +149,11 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
             query = query.eq('id_kelas', selectedKelas).order('nama');
         } else {
             // ALL CLASSES -> Apply Pagination
-            // Supabase range is 0-indexed and inclusive
             const from = (currentPage - 1) * rowsPerPage;
             const to = from + rowsPerPage - 1;
             
             query = query
-                .order('id_kelas', { ascending: true }) // Group by class first
+                .order('id_kelas', { ascending: true }) 
                 .order('nama', { ascending: true })
                 .range(from, to);
         }
@@ -111,8 +176,6 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
   };
 
   const fetchKehadiran = async () => {
-    setIsEditing(false);
-    
     try {
         const studentIds = siswaList.map(s => s.id);
         
@@ -127,7 +190,6 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
         const newFormState: AttendanceFormState = {};
         const hasData = currentData.length > 0;
 
-        // Note: isDataSaved only reflects if *some* data exists for the current view
         setIsDataSaved(hasData);
 
         siswaList.forEach(s => {
@@ -140,7 +202,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                 };
             } else {
                 newFormState[s.id] = {
-                    status: null, // Default null/kosong
+                    status: null, 
                     catatan: ''
                 };
             }
@@ -154,6 +216,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
   };
 
   const handleRadioChange = (id_siswa: string, value: 'HADIR' | 'SAKIT' | 'IZIN' | 'ALPHA') => {
+    if (isHoliday) return; // Prevent change if holiday/future
     setFormData(prev => ({
         ...prev,
         [id_siswa]: { ...prev[id_siswa], status: value }
@@ -161,6 +224,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
   };
 
   const handleCatatanChange = (id_siswa: string, value: string) => {
+    if (isHoliday) return; // Prevent change if holiday/future
     setFormData(prev => ({
         ...prev,
         [id_siswa]: { ...prev[id_siswa], catatan: value }
@@ -168,6 +232,11 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
   };
 
   const handleSaveOrUpdate = async () => {
+    if (isHoliday) {
+        showToast(`Gagal: ${holidayInfo?.keterangan || 'Hari Libur / Masa Depan'}`, 'error');
+        return;
+    }
+
     setProcessing(true);
     try {
         // Hanya ambil data yang statusnya dipilih (tidak null)
@@ -205,6 +274,12 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
   };
 
   const handleDelete = async () => {
+    // Prevent delete on future dates (unless overridden, but logic says block)
+    if (tanggal > todayStr) {
+        showToast('Tidak dapat menghapus data masa depan.', 'error');
+        return;
+    }
+
     setProcessing(true);
     try {
         const studentIds = siswaList.map(s => s.id);
@@ -227,7 +302,8 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
 
   const RadioOption = ({ id_siswa, val, label, activeColorClass }: any) => {
       const isChecked = formData[id_siswa]?.status === val;
-      const isDisabled = isDataSaved && !isEditing;
+      // Disable if: Holiday OR (Data Saved AND Not Editing)
+      const isDisabled = isHoliday || (isDataSaved && !isEditing);
 
       return (
           <label className={`
@@ -287,11 +363,32 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
              <input 
                 type="date" 
                 value={tanggal}
+                max={todayStr} // UI constraint for future dates
                 onChange={(e) => setTanggal(e.target.value)}
                 className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:border-primary"
              />
         </div>
       </div>
+
+      {/* Alert Block for Holiday/Future */}
+      {isHoliday && holidayInfo && (
+        <div className={`mb-6 p-4 rounded-lg flex items-start gap-3 border ${
+            holidayInfo.jenis === 'FUTURE_DATE' 
+            ? 'bg-gray-700/50 border-gray-600 text-gray-300' 
+            : 'bg-red-900/30 border-red-600/50 text-red-200'
+        }`}>
+            <span className="text-2xl">{holidayInfo.jenis === 'FUTURE_DATE' ? '⏳' : '🚫'}</span>
+            <div>
+                <h4 className={`font-bold ${holidayInfo.jenis === 'FUTURE_DATE' ? 'text-gray-200' : 'text-red-100'}`}>
+                    {holidayInfo.jenis === 'FUTURE_DATE' ? 'Tanggal Belum Dapat Diisi' : 'Tidak dapat menginput kehadiran'}
+                </h4>
+                <p className="text-sm">
+                    Status: <strong>{holidayInfo.jenis === 'FUTURE_DATE' ? 'Masa Depan' : holidayInfo.jenis.replace(/_/g, ' ')}</strong>.
+                    {holidayInfo.keterangan && <span className="block mt-1 italic opacity-80">"{holidayInfo.keterangan}"</span>}
+                </p>
+            </div>
+        </div>
+      )}
 
       {/* Main Content */}
       {!selectedKelas ? (
@@ -314,7 +411,14 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                        {isDataSaved && isEditing && <span className="ml-3 px-2 py-1 bg-yellow-600 text-white rounded text-xs font-bold animate-pulse">MODE EDIT</span>}
                    </div>
                    <div className="flex gap-2">
-                       {isDataSaved && !isEditing ? (
+                       {/* BUTTON LOGIC:
+                           If Holiday: ALL DISABLED (Except maybe cancel if editing active, but editing disabled anyway)
+                           Else If Saved & Not Editing: Show Edit/Delete
+                           Else (Not Saved OR Editing): Show Save/Cancel
+                       */}
+                       {isHoliday ? (
+                           <span className="text-red-400 text-sm font-bold italic py-2">Input Dikunci</span>
+                       ) : isDataSaved && !isEditing ? (
                            <>
                                <button onClick={() => setIsEditing(true)} className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-medium shadow-lg text-sm">✏️ Edit</button>
                                <button onClick={() => setShowDeleteConfirm(true)} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-medium shadow-lg text-sm">🗑️ Hapus</button>
@@ -348,7 +452,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Catatan</th>
                               </tr>
                           </thead>
-                          <tbody className="bg-gray-800 divide-y divide-gray-700">
+                          <tbody className={`bg-gray-800 divide-y divide-gray-700 ${isHoliday ? 'opacity-60 grayscale-[50%]' : ''}`}>
                               {siswaList.map((s, idx) => {
                                   // Row numbering calculation based on pagination
                                   const rowNumber = selectedKelas === 'ALL' ? startRowIndex + idx + 1 : idx + 1;
@@ -379,9 +483,9 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                                               type="text"
                                               value={formData[s.id]?.catatan || ''}
                                               onChange={(e) => handleCatatanChange(s.id, e.target.value)}
-                                              disabled={isDataSaved && !isEditing}
-                                              placeholder="Ket..."
-                                              className="bg-gray-700 border border-gray-600 text-white text-sm rounded px-3 py-2 w-full disabled:opacity-50"
+                                              disabled={isHoliday || (isDataSaved && !isEditing)}
+                                              placeholder={isHoliday ? "Terkunci" : "Ket..."}
+                                              className="bg-gray-700 border border-gray-600 text-white text-sm rounded px-3 py-2 w-full disabled:opacity-50 disabled:cursor-not-allowed"
                                           />
                                       </td>
                                   </tr>

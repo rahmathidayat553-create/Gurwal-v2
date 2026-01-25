@@ -8,6 +8,7 @@ import { CrudGuru } from './components/CrudGuru';
 import { CrudSiswa } from './components/CrudSiswa';
 import { CrudKelas } from './components/CrudKelas';
 import { CrudMapel } from './components/CrudMapel';
+import { CrudKalender } from './components/CrudKalender'; // NEW IMPORT
 import { CrudAnggotaGurwal } from './components/CrudAnggotaGurwal';
 import { CrudDataPengajar } from './components/CrudDataPengajar';
 import { CrudSekolah } from './components/CrudSekolah';
@@ -161,6 +162,7 @@ function App() {
       case 'SISWA': return <CrudSiswa showToast={showToast} />;
       case 'KELAS': return <CrudKelas showToast={showToast} />;
       case 'MAPEL': return <CrudMapel showToast={showToast} />;
+      case 'KALENDER_PENDIDIKAN': return <CrudKalender showToast={showToast} />; // NEW CASE
       case 'ANGGOTA_GURWAL': return <CrudAnggotaGurwal showToast={showToast} />;
       case 'DATA_PENGAJAR': return <CrudDataPengajar showToast={showToast} />;
       case 'PENGATURAN_SEKOLAH': return <CrudSekolah showToast={showToast} />;

@@ -21,8 +21,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, currentUser, currentVi
     { id: 'SISWA', label: 'Data Siswa', icon: '🎓' },
     { id: 'KELAS', label: 'Data Kelas', icon: '🏫' },
     { id: 'MAPEL', label: 'Mata Pelajaran', icon: '📘' },
+    { id: 'KALENDER_PENDIDIKAN', label: 'Kalender Akademik', icon: '📅' },
     { id: 'ANGGOTA_GURWAL', label: 'Anggota GurWal', icon: '🤝' },
-    { id: 'INPUT_KEHADIRAN_ADMIN', label: 'Input Kehadiran', icon: '📝' }, // NEW MENU
+    { id: 'INPUT_KEHADIRAN_ADMIN', label: 'Input Kehadiran', icon: '📝' },
     { id: 'REKAP_KEHADIRAN', label: 'Rekap Kehadiran', icon: '📊' },
     { id: 'DATA_PENGAJAR', label: 'Data Pengajar', icon: '📚' },
     { id: 'PENGATURAN_SEKOLAH', label: 'Pengaturan Sekolah', icon: '🏫' },

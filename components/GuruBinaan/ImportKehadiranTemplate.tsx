@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+
+import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '../../supabaseClient';
 import { Guru } from '../../types';
 import * as XLSX from 'xlsx';
@@ -15,27 +16,91 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
   const [singleDate, setSingleDate] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [hariSekolah, setHariSekolah] = useState<number>(5); // Default 5 hari
 
   const [loading, setLoading] = useState(false);
   const [importProgress, setImportProgress] = useState(0); 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Constants
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // --- INITIAL LOAD: Get Hari Sekolah ---
+  useEffect(() => {
+    const fetchSettings = async () => {
+      const { data } = await supabase
+        .from('sekolah')
+        .select('hari_sekolah')
+        .limit(1)
+        .maybeSingle();
+      if (data) {
+        setHariSekolah(data.hari_sekolah);
+      }
+    };
+    fetchSettings();
+  }, []);
+
   // --- LOGIC TANGGAL ---
 
-  // 1. Tambah Satu Tanggal
-  const handleAddSingleDate = () => {
+  // 1. Tambah Satu Tanggal dengan Validasi Live
+  const handleAddSingleDate = async () => {
     if (!singleDate) return;
+    
+    // Cek Tanggal Masa Depan
+    if (singleDate > todayStr) {
+        showToast('Gagal: Tidak dapat memilih tanggal masa depan (besok atau setelahnya).', 'error');
+        return;
+    }
+
+    // Cek Duplikasi Lokal
     if (selectedDates.includes(singleDate)) {
       showToast('Tanggal sudah ada dalam daftar', 'error');
       return;
     }
-    const newDates = [...selectedDates, singleDate].sort();
-    setSelectedDates(newDates);
-    setSingleDate('');
+
+    setLoading(true);
+    try {
+        const dateObj = new Date(singleDate);
+        const dayOfWeek = dateObj.getDay(); // 0 = Minggu
+
+        // 1. Cek Akhir Pekan (Lokal)
+        if (dayOfWeek === 0) {
+            showToast('Gagal: Tanggal yang dipilih adalah hari Minggu.', 'error');
+            return;
+        }
+        if (hariSekolah === 5 && dayOfWeek === 6) {
+            showToast('Gagal: Tanggal yang dipilih adalah hari Sabtu (Libur Sekolah).', 'error');
+            return;
+        }
+
+        // 2. Cek Kalender Pendidikan (Database)
+        const { data: libur } = await supabase
+            .from('kalender_pendidikan')
+            .select('jenis, keterangan')
+            .eq('tanggal', singleDate)
+            .maybeSingle();
+
+        if (libur) {
+            showToast(`Gagal: Tanggal ini libur (${libur.jenis.replace(/_/g, ' ')}). ${libur.keterangan || ''}`, 'error');
+            return;
+        }
+
+        // Lolos Validasi
+        const newDates = [...selectedDates, singleDate].sort();
+        setSelectedDates(newDates);
+        setSingleDate('');
+        showToast('Tanggal berhasil ditambahkan', 'success');
+
+    } catch (error) {
+        console.error(error);
+        showToast('Terjadi kesalahan saat memvalidasi tanggal', 'error');
+    } finally {
+        setLoading(false);
+    }
   };
 
-  // 2. Tambah Rentang Tanggal (Multiselect Logic)
-  const handleAddRange = () => {
+  // 2. Tambah Rentang Tanggal dengan Filter Otomatis
+  const handleAddRange = async () => {
     if (!startDate || !endDate) {
         showToast('Mohon isi Tanggal Mulai dan Tanggal Akhir', 'error');
         return;
@@ -49,27 +114,80 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
         return;
     }
 
-    const tempDates: string[] = [];
-    let current = new Date(start);
+    setLoading(true);
+    try {
+        // Ambil Data Libur dalam rentang tersebut dari DB
+        const { data: holidays } = await supabase
+            .from('kalender_pendidikan')
+            .select('tanggal, jenis')
+            .gte('tanggal', startDate)
+            .lte('tanggal', endDate);
+        
+        const holidayMap = new Set(holidays?.map(h => h.tanggal));
 
-    // Loop dari start sampai end
-    while (current <= end) {
-        const dateStr = current.toISOString().split('T')[0];
-        if (!selectedDates.includes(dateStr)) {
-            tempDates.push(dateStr);
+        const validDatesToAdd: string[] = [];
+        let skippedCount = 0;
+        let skippedReason = '';
+
+        let current = new Date(start);
+
+        // Loop dari start sampai end
+        while (current <= end) {
+            const dateStr = current.toISOString().split('T')[0];
+            const dayOfWeek = current.getDay();
+
+            let isValid = true;
+
+            // Cek Tanggal Masa Depan
+            if (dateStr > todayStr) {
+                isValid = false;
+                // Jangan break, lanjut loop (siapa tahu range berantakan, tapi idealnya urut)
+                // Sebenarnya jika sorted, bisa break. Tapi aman continue.
+            }
+            // Cek Akhir Pekan
+            else if (dayOfWeek === 0 || (hariSekolah === 5 && dayOfWeek === 6)) {
+                isValid = false;
+            }
+            // Cek Kalender Libur
+            else if (holidayMap.has(dateStr)) {
+                isValid = false;
+                skippedReason = 'Hari Libur Nasional/Sekolah';
+            }
+            // Cek Duplikasi State
+            else if (selectedDates.includes(dateStr)) {
+                isValid = false; // Sudah ada, skip diam-diam
+            }
+
+            if (isValid) {
+                validDatesToAdd.push(dateStr);
+            } else {
+                // Hanya hitung skip jika bukan karena duplikasi
+                if (!selectedDates.includes(dateStr)) skippedCount++;
+            }
+
+            // Increment hari +1
+            current.setDate(current.getDate() + 1);
         }
-        // Increment hari +1
-        current.setDate(current.getDate() + 1);
-    }
 
-    if (tempDates.length === 0) {
-        showToast('Semua tanggal dalam rentang ini sudah terpilih.', 'error');
-    } else {
-        const combinedDates = [...selectedDates, ...tempDates].sort();
-        setSelectedDates(combinedDates);
-        setStartDate('');
-        setEndDate('');
-        showToast(`Berhasil menambahkan ${tempDates.length} tanggal.`, 'success');
+        if (validDatesToAdd.length === 0) {
+            showToast('Tidak ada tanggal yang ditambahkan (Semua tanggal dalam rentang ini libur/masa depan/sudah terpilih).', 'error');
+        } else {
+            const combinedDates = [...selectedDates, ...validDatesToAdd].sort();
+            setSelectedDates(combinedDates);
+            setStartDate('');
+            setEndDate('');
+            
+            if (skippedCount > 0) {
+                showToast(`Berhasil menambah ${validDatesToAdd.length} tanggal. (${skippedCount} dilewati karena Libur/Masa Depan)`, 'success');
+            } else {
+                showToast(`Berhasil menambah ${validDatesToAdd.length} tanggal.`, 'success');
+            }
+        }
+
+    } catch (err) {
+        showToast('Gagal memproses rentang tanggal', 'error');
+    } finally {
+        setLoading(false);
     }
   };
 
@@ -91,6 +209,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
 
     setLoading(true);
     try {
+      // Ambil data siswa
       const { data: siswaData, error } = await supabase
         .from('bimbingan')
         .select('*, siswa(id, nama, nisn, kelas(nama))')
@@ -112,6 +231,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
           NAMA: item.siswa?.nama || '',
           KELAS: item.siswa?.kelas?.nama || '',
         };
+        // Gunakan selectedDates sebagai header
         selectedDates.forEach(date => {
           row[date] = ''; 
         });
@@ -126,6 +246,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
       XLSX.writeFile(wb, filename);
 
       showToast('Template berhasil dibuat!', 'success');
+
     } catch (err: any) {
       console.error(err);
       showToast('Gagal membuat template: ' + err.message, 'error');
@@ -156,6 +277,53 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
           setLoading(false);
           return;
         }
+
+        // --- VALIDASI HEADER TANGGAL SEBELUM IMPORT ---
+        const firstRow = data[0] as any;
+        const keys = Object.keys(firstRow);
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        const dateColumns = keys.filter(k => dateRegex.test(k));
+
+        if (dateColumns.length > 0) {
+            // 1. Validasi Tanggal Masa Depan
+            const futureDates = dateColumns.filter(d => d > todayStr);
+            if (futureDates.length > 0) {
+                showToast(`GAGAL IMPORT! File mengandung tanggal masa depan: ${futureDates.join(', ')}.`, 'error');
+                setLoading(false);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+                return;
+            }
+
+            // 2. Validasi Hari Libur (Weekend) sesuai pengaturan sekolah
+            const invalidSchoolDays = dateColumns.filter(d => {
+                const day = new Date(d).getDay();
+                if (day === 0) return true; // Minggu
+                if (hariSekolah === 5 && day === 6) return true; // Sabtu
+                return false;
+            });
+
+            if (invalidSchoolDays.length > 0) {
+                showToast(`GAGAL IMPORT! File mengandung tanggal libur sekolah (Sabtu/Minggu): ${invalidSchoolDays.join(', ')}`, 'error');
+                setLoading(false);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+                return;
+            }
+
+            // 3. Cek apakah ada tanggal libur (Kalender Pendidikan) di kolom Excel
+            const { data: holidays } = await supabase
+                .from('kalender_pendidikan')
+                .select('tanggal, jenis')
+                .in('tanggal', dateColumns);
+            
+            if (holidays && holidays.length > 0) {
+                const holidayDates = holidays.map(h => `${h.tanggal} (${h.jenis})`).join(', ');
+                showToast(`GAGAL IMPORT! File mengandung tanggal libur nasional: ${holidayDates}.`, 'error');
+                setLoading(false);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+                return;
+            }
+        }
+        // ----------------------------------------------
 
         let processedCount = 0;
         let errorCount = 0;
@@ -193,9 +361,6 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
           if (!studentId) {
             errorCount++;
           } else {
-            const keys = Object.keys(row);
-            const dateRegex = /^\d{4}-\d{2}-\d{2}$/; 
-
             for (const key of keys) {
                if (dateRegex.test(key)) {
                   const rawStatus = row[key] ? String(row[key]).trim().toUpperCase() : '';
@@ -207,23 +372,34 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                   else if (['A', 'ALPHA', 'ALPA'].includes(rawStatus)) statusDb = 'ALPHA';
 
                   if (statusDb) {
-                      const { data: existing } = await supabase
-                          .from('kehadiran')
-                          .select('id')
-                          .eq('id_guru', currentUser.id)
-                          .eq('id_siswa', studentId)
-                          .eq('tanggal', key)
-                          .maybeSingle();
+                      // Upsert Kehadiran
+                      const { error: upsertError } = await supabase.from('kehadiran').upsert({
+                          id_guru: currentUser.id,
+                          id_siswa: studentId,
+                          tanggal: key,
+                          status: statusDb
+                      }, { onConflict: 'id_siswa, tanggal' });
 
-                      if (existing) {
-                          await supabase.from('kehadiran').update({ status: statusDb }).eq('id', existing.id);
-                      } else {
-                          await supabase.from('kehadiran').insert([{
-                              id_guru: currentUser.id,
-                              id_siswa: studentId,
-                              tanggal: key,
-                              status: statusDb
-                          }]);
+                      // Fallback manual upsert logic jika tidak ada unique constraint composite
+                      if (upsertError) {
+                          const { data: existing } = await supabase
+                              .from('kehadiran')
+                              .select('id')
+                              .eq('id_guru', currentUser.id)
+                              .eq('id_siswa', studentId)
+                              .eq('tanggal', key)
+                              .maybeSingle();
+
+                          if (existing) {
+                              await supabase.from('kehadiran').update({ status: statusDb }).eq('id', existing.id);
+                          } else {
+                              await supabase.from('kehadiran').insert([{
+                                  id_guru: currentUser.id,
+                                  id_siswa: studentId,
+                                  tanggal: key,
+                                  status: statusDb
+                              }]);
+                          }
                       }
                   }
                }
@@ -258,6 +434,10 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
       <h2 className="text-3xl font-bold text-white mb-2">Import Kehadiran (Custom)</h2>
       <p className="text-gray-400 mb-8">
         Fitur ini memungkinkan Anda mengisi absensi untuk beberapa tanggal sekaligus menggunakan Excel.
+        <br />
+        <span className="text-yellow-500 text-xs">
+            * Sistem otomatis memblokir penambahan tanggal libur/akhir pekan pada template.
+        </span>
       </p>
 
       {/* STEP 1: PILIH TANGGAL */}
@@ -274,6 +454,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                         <label className="text-xs text-gray-400 block mb-1">Dari Tanggal</label>
                         <input 
                             type="date" 
+                            max={todayStr}
                             value={startDate}
                             onChange={(e) => setStartDate(e.target.value)}
                             className="bg-gray-700 border border-gray-500 text-white rounded px-3 py-2 w-full focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -286,6 +467,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                         <label className="text-xs text-gray-400 block mb-1">Sampai Tanggal</label>
                         <input 
                             type="date" 
+                            max={todayStr}
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
                             className="bg-gray-700 border border-gray-500 text-white rounded px-3 py-2 w-full focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -293,13 +475,14 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                     </div>
                     <button 
                         onClick={handleAddRange}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium transition w-full md:w-auto h-[42px]"
+                        disabled={loading}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded font-medium transition w-full md:w-auto h-[42px] disabled:opacity-50"
                     >
-                        + Tambahkan Rentang
+                        {loading ? 'Memvalidasi...' : '+ Tambahkan Rentang'}
                     </button>
                 </div>
                 <p className="text-xs text-gray-400 mt-2">
-                    *Semua tanggal di antara tanggal mulai dan akhir akan ditambahkan ke daftar.
+                    * Tanggal libur/akhir pekan di antara rentang ini akan otomatis dilewati.
                 </p>
             </div>
 
@@ -309,15 +492,17 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                 <div className="flex flex-col md:flex-row gap-4">
                     <input 
                         type="date" 
+                        max={todayStr}
                         value={singleDate}
                         onChange={(e) => setSingleDate(e.target.value)}
                         className="bg-gray-700 border border-gray-500 text-white rounded px-3 py-2 w-full md:w-64"
                     />
                     <button 
                         onClick={handleAddSingleDate}
-                        className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-medium transition w-full md:w-auto"
+                        disabled={loading}
+                        className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-medium transition w-full md:w-auto disabled:opacity-50"
                     >
-                        + Tambah
+                        {loading ? 'Cek...' : '+ Tambah'}
                     </button>
                 </div>
             </div>

@@ -103,6 +103,17 @@ export interface Sekolah {
   email: string | null;
   no_telp: string | null;
   logo_url: string | null;
+  hari_sekolah: number; // 5 atau 6
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export interface KalenderPendidikan {
+  id: string;
+  tanggal: string;
+  jenis: 'LIBUR_NASIONAL' | 'LIBUR_SEKOLAH' | 'CUTI_BERSAMA';
+  keterangan: string | null;
+  created_at?: string;
 }
 
 export type ViewState = 
@@ -112,9 +123,10 @@ export type ViewState =
   | 'SISWA' 
   | 'KELAS' 
   | 'MAPEL'
+  | 'KALENDER_PENDIDIKAN' // NEW
   | 'ANGGOTA_GURWAL' 
   | 'DATA_PENGAJAR'
-  | 'INPUT_KEHADIRAN_ADMIN' // NEW
+  | 'INPUT_KEHADIRAN_ADMIN'
   | 'REKAP_KEHADIRAN'
   | 'PENGATURAN_SEKOLAH'
   // Unified Guru (Binaan + Pengajar)
