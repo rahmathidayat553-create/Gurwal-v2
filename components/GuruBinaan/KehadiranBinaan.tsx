@@ -102,8 +102,8 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
               jenis: 'FUTURE_DATE',
               keterangan: 'Tanggal Masa Depan (Belum dapat diisi)'
           });
-          setLoading(false);
-          return; // Stop here, no need to fetch DB
+          // Jangan return, tetap fetch data jika ada (walau harusnya kosong) agar UI konsisten
+          // Tapi input tetap disable karena isHoliday=true
       }
 
       // --- PRIORITY 2: CEK HARI SEKOLAH (SENIN-JUMAT / SABTU) ---
@@ -122,12 +122,15 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       }
 
       if (isWeekend) {
-          setIsHoliday(true);
-          setHolidayInfo({ 
-              jenis: 'HARI_NON_AKTIF', 
-              keterangan: weekendLabel 
-          });
-          // Lanjut fetch data (mungkin ada data historis salah input yg mau dilihat)
+          // Jika sudah terdeteksi masa depan, biarkan error masa depan prioritas.
+          // Jika tidak, baru set weekend.
+          if (tanggal <= todayStr) {
+              setIsHoliday(true);
+              setHolidayInfo({ 
+                  jenis: 'HARI_NON_AKTIF', 
+                  keterangan: weekendLabel 
+              });
+          }
       }
 
       // Parallel Request: Cek Kehadiran & Cek Kalender Pendidikan
@@ -139,8 +142,10 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
           .eq('tanggal', tanggal)
       ];
 
-      // Hanya query kalender jika belum terdeteksi weekend
-      if (!isWeekend) {
+      // Hanya query kalender jika valid date (bukan masa depan, bukan weekend)
+      const shouldCheckCalendar = tanggal <= todayStr && !isWeekend;
+
+      if (shouldCheckCalendar) {
           queries.push(
             supabase
               .from('kalender_pendidikan')
@@ -152,10 +157,10 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
       const results = await Promise.all(queries);
       const kehadiranRes = results[0];
-      const kalenderRes = results[1]; // Undefined jika isWeekend=true
+      const kalenderRes = shouldCheckCalendar ? results[1] : null;
 
       // --- PRIORITY 3: CEK KALENDER PENDIDIKAN ---
-      if (!isWeekend && kalenderRes?.data) {
+      if (kalenderRes?.data) {
         setIsHoliday(true);
         setHolidayInfo(kalenderRes.data);
       }
