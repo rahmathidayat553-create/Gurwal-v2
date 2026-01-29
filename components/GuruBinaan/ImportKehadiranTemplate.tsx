@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '../../supabaseClient';
 import { Guru } from '../../types';
@@ -22,8 +21,13 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
   const [importProgress, setImportProgress] = useState(0); 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Constants
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Constants - Menggunakan Local Time untuk menghindari bug UTC+7
+  const getLocalTodayStr = () => {
+    const d = new Date();
+    const offset = d.getTimezoneOffset() * 60000;
+    return new Date(d.getTime() - offset).toISOString().split('T')[0];
+  };
+  const todayStr = getLocalTodayStr();
 
   // --- INITIAL LOAD: Get Hari Sekolah ---
   useEffect(() => {
@@ -141,8 +145,6 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
             // Cek Tanggal Masa Depan
             if (dateStr > todayStr) {
                 isValid = false;
-                // Jangan break, lanjut loop (siapa tahu range berantakan, tapi idealnya urut)
-                // Sebenarnya jika sorted, bisa break. Tapi aman continue.
             }
             // Cek Akhir Pekan
             else if (dayOfWeek === 0 || (hariSekolah === 5 && dayOfWeek === 6)) {
@@ -161,7 +163,6 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
             if (isValid) {
                 validDatesToAdd.push(dateStr);
             } else {
-                // Hanya hitung skip jika bukan karena duplikasi
                 if (!selectedDates.includes(dateStr)) skippedCount++;
             }
 
@@ -209,7 +210,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
 
     setLoading(true);
     try {
-      // Ambil data siswa
+      // 1. Ambil data siswa
       const { data: siswaData, error } = await supabase
         .from('bimbingan')
         .select('*, siswa(id, nama, nisn, kelas(nama))')
@@ -224,17 +225,42 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
         return;
       }
 
+      // 2. AMBIL DATA KEHADIRAN EXISTING (Fitur Baru)
+      // Kita ambil data kehadiran yang sudah ada di DB untuk tanggal-tanggal yang dipilih
+      const { data: existingAttendance } = await supabase
+        .from('kehadiran')
+        .select('id_siswa, tanggal, status')
+        .eq('id_guru', currentUser.id)
+        .in('tanggal', selectedDates);
+
+      // Buat Map: "ID_SISWA_TANGGAL" -> "KODE STATUS"
+      const attendanceMap = new Map<string, string>();
+      existingAttendance?.forEach((rec: any) => {
+          const key = `${rec.id_siswa}_${rec.tanggal}`;
+          let code = '';
+          if (rec.status === 'HADIR') code = 'H';
+          else if (rec.status === 'SAKIT') code = 'S';
+          else if (rec.status === 'IZIN') code = 'I';
+          else if (rec.status === 'ALPHA') code = 'A';
+          attendanceMap.set(key, code);
+      });
+
+      // 3. Generate Rows dengan Data Existing
       const rows = siswaData.map((item, index) => {
         const row: any = {
           NO: index + 1,
-          NISN: item.siswa?.nisn || '', 
+          NISN: item.siswa?.nisn ? `'${item.siswa.nisn}` : '', // Force text format
           NAMA: item.siswa?.nama || '',
           KELAS: item.siswa?.kelas?.nama || '',
         };
-        // Gunakan selectedDates sebagai header
+        
+        // Loop setiap tanggal, isi dengan data existing jika ada
         selectedDates.forEach(date => {
-          row[date] = ''; 
+          const key = `${item.id_siswa}_${date}`;
+          // Jika ada data di DB, isi kodenya. Jika tidak, kosongkan.
+          row[date] = attendanceMap.get(key) || ''; 
         });
+        
         return row;
       });
 
@@ -242,10 +268,10 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Kehadiran");
 
-      const filename = `Template_Kehadiran_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const filename = `Template_Kehadiran_Custom_${getLocalTodayStr()}.xlsx`;
       XLSX.writeFile(wb, filename);
 
-      showToast('Template berhasil dibuat!', 'success');
+      showToast('Template berhasil didownload! Data kehadiran lama sudah terisi otomatis.', 'success');
 
     } catch (err: any) {
       console.error(err);
@@ -331,7 +357,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
 
         for (let i = 0; i < totalRows; i++) {
           const row: any = data[i];
-          const nisn = row['NISN'] ? String(row['NISN']).trim() : '';
+          const nisn = row['NISN'] ? String(row['NISN']).replace(/['"]/g, '').trim() : '';
           const nama = row['NAMA'] ? String(row['NAMA']).trim() : '';
 
           if (!nisn && !nama) {
@@ -350,6 +376,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
           if (foundSiswa) {
             studentId = foundSiswa.id;
           } else {
+            // Fallback cari by nama
             const { data: foundSiswaByName } = await supabase
                 .from('siswa')
                 .select('id')
@@ -372,34 +399,32 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                   else if (['A', 'ALPHA', 'ALPA'].includes(rawStatus)) statusDb = 'ALPHA';
 
                   if (statusDb) {
-                      // Upsert Kehadiran
-                      const { error: upsertError } = await supabase.from('kehadiran').upsert({
-                          id_guru: currentUser.id,
-                          id_siswa: studentId,
-                          tanggal: key,
-                          status: statusDb
-                      }, { onConflict: 'id_siswa, tanggal' });
+                      // UPSERT Logic: Update jika ada, Insert jika baru
+                      // Kita gunakan manual upsert flow untuk keamanan logika
+                      const { data: existingRecord } = await supabase
+                          .from('kehadiran')
+                          .select('id')
+                          .eq('id_guru', currentUser.id)
+                          .eq('id_siswa', studentId)
+                          .eq('tanggal', key)
+                          .maybeSingle();
 
-                      // Fallback manual upsert logic jika tidak ada unique constraint composite
-                      if (upsertError) {
-                          const { data: existing } = await supabase
+                      if (existingRecord) {
+                          // Update Existing
+                          await supabase
                               .from('kehadiran')
-                              .select('id')
-                              .eq('id_guru', currentUser.id)
-                              .eq('id_siswa', studentId)
-                              .eq('tanggal', key)
-                              .maybeSingle();
-
-                          if (existing) {
-                              await supabase.from('kehadiran').update({ status: statusDb }).eq('id', existing.id);
-                          } else {
-                              await supabase.from('kehadiran').insert([{
+                              .update({ status: statusDb })
+                              .eq('id', existingRecord.id);
+                      } else {
+                          // Insert New
+                          await supabase
+                              .from('kehadiran')
+                              .insert([{
                                   id_guru: currentUser.id,
                                   id_siswa: studentId,
                                   tanggal: key,
                                   status: statusDb
                               }]);
-                          }
                       }
                   }
                }
@@ -435,8 +460,8 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
       <p className="text-gray-400 mb-8">
         Fitur ini memungkinkan Anda mengisi absensi untuk beberapa tanggal sekaligus menggunakan Excel.
         <br />
-        <span className="text-yellow-500 text-xs">
-            * Sistem otomatis memblokir penambahan tanggal libur/akhir pekan pada template.
+        <span className="text-green-400 text-xs block mt-1">
+            * Template yang didownload akan <strong>otomatis berisi data kehadiran yang sudah ada</strong> (jika ada), sehingga Anda tidak perlu khawatir menimpa data yang sudah benar dengan data kosong.
         </span>
       </p>
 
@@ -536,7 +561,7 @@ export const ImportKehadiranTemplate: React.FC<Props> = ({ currentUser, showToas
                     disabled={loading || selectedDates.length === 0}
                     className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold transition shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    {loading ? 'Memproses...' : '📥 Buat & Download Template Excel'}
+                    {loading ? 'Mengambil Data Existing...' : '📥 Generate & Download Template (Isi Data Existing)'}
                 </button>
             </div>
         </div>
