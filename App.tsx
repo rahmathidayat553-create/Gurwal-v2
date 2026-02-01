@@ -39,10 +39,21 @@ interface ToastState {
   position?: 'top-right' | 'center';
 }
 
+export interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  time: string;
+  read: boolean;
+  type: 'info' | 'success' | 'warning' | 'error';
+  timestamp: number; // Added for 24h cleanup logic
+}
+
 function App() {
   const [session, setSession] = useState<Guru | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>('DASHBOARD');
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
   useEffect(() => {
     // Check localStorage for persisted session
@@ -68,42 +79,58 @@ function App() {
     }
   }, []);
 
-  // GLOBAL REALTIME ACTIVITY NOTIFICATION (Only for ADMIN)
+  // --- 24 HOUR CLEANUP LOGIC ---
   useEffect(() => {
-    if (session?.peran === 'ADMIN') {
-       const channel = supabase
-        .channel('global_toast_activity')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'kehadiran' }, async (payload) => {
-            // Fetch detailed info for the toast message
-            // payload.new contains the raw inserted row
-            const { data } = await supabase
-              .from('kehadiran')
-              .select('status, guru(nama), siswa(nama)')
-              .eq('id', payload.new.id)
-              .single();
+    // Jalankan pengecekan setiap 1 menit
+    const cleanupInterval = setInterval(() => {
+        setNotifications(prevNotifications => {
+            const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000); // 24 jam dalam milidetik
+            // Filter notifikasi yang timestampnya lebih baru dari 24 jam yang lalu
+            return prevNotifications.filter(n => n.timestamp > oneDayAgo);
+        });
+    }, 60000); 
 
-            if (data) {
-                // @ts-ignore
-                const guruName = data.guru?.nama || 'Seorang Guru';
-                // @ts-ignore
-                const siswaName = data.siswa?.nama || 'Siswa';
-                const status = data.status;
+    return () => clearInterval(cleanupInterval);
+  }, []);
 
-                // Trigger Toast
-                showToast(
-                    `🔔 Aktivitas Baru:\n${guruName} menginput ${siswaName} (${status})`, 
-                    'success', 
-                    5000
-                );
-            }
-        })
-        .subscribe();
+  // GLOBAL REALTIME ACTIVITY NOTIFICATION
+  useEffect(() => {
+    if (!session) return;
 
-        return () => {
-            supabase.removeChannel(channel);
-        };
-    }
+    // Listen to changes on key tables
+    const tablesToWatch = ['kehadiran', 'pelanggaran', 'prestasi', 'nilai', 'siswa', 'guru'];
+    
+    const channel = supabase.channel('global_changes');
+
+    tablesToWatch.forEach(table => {
+        channel.on('postgres_changes', { event: '*', schema: 'public', table: table }, (payload) => {
+            handleRealtimeEvent(table, payload);
+        });
+    });
+
+    channel.subscribe();
+
+    return () => {
+        supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
+
+  const handleRealtimeEvent = (table: string, payload: any) => {
+      // Basic implementation: Create a generic message
+      let action = '';
+      let msg = '';
+      
+      if (payload.eventType === 'INSERT') action = 'Penambahan data';
+      else if (payload.eventType === 'UPDATE') action = 'Pembaruan data';
+      else if (payload.eventType === 'DELETE') action = 'Penghapusan data';
+
+      msg = `${action} pada tabel ${table.toUpperCase()}.`;
+
+      // UPDATED: Gunakan showToast agar muncul popup DAN masuk ke list notifikasi
+      // Info tipe 'info' agar warnanya biru (neutral)
+      showToast(msg, 'success'); 
+  };
 
   const handleLoginSuccess = (user: Guru) => {
     setSession(user);
@@ -121,11 +148,25 @@ function App() {
     localStorage.removeItem('gurwal_admin_user');
     localStorage.removeItem('gurwal_current_view');
     showToast('Anda telah keluar', 'success');
+    setNotifications([]);
   };
 
   const handleChangeView = (view: ViewState) => {
     setCurrentView(view);
     localStorage.setItem('gurwal_current_view', view);
+  };
+
+  const addNotification = (title: string, message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+      const newNotif: NotificationItem = {
+          id: Date.now().toString() + Math.random().toString(),
+          title,
+          message,
+          time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+          read: false,
+          type,
+          timestamp: Date.now() // Simpan waktu pembuatan untuk cleanup logic
+      };
+      setNotifications(prev => [newNotif, ...prev].slice(0, 50)); // Limit 50 recent
   };
 
   const showToast = (
@@ -135,6 +176,14 @@ function App() {
     position: 'top-right' | 'center' = 'top-right'
   ) => {
     setToast({ message, type, duration, position });
+    // Juga tambahkan ke lonceng notifikasi
+    // Jika tipe success -> judul "Berhasil", error -> "Peringatan", else -> "Info"
+    const title = type === 'success' ? 'Aktivitas Baru' : 'Peringatan';
+    addNotification(title, message, type);
+  };
+
+  const handleClearNotifications = () => {
+      setNotifications([]);
   };
 
   // Render Logic
@@ -197,6 +246,8 @@ function App() {
       currentView={currentView}
       onChangeView={handleChangeView}
       onLogout={handleLogout}
+      notifications={notifications}
+      onClearNotifications={handleClearNotifications}
     >
       {renderContent()}
       {toast && (

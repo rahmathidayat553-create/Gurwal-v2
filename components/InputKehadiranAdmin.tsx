@@ -39,6 +39,10 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
 
   // Form State
   const [formData, setFormData] = useState<AttendanceFormState>({});
+  
+  // NEW: Store original DB values for visual check (Saved vs Draft)
+  const [originalStatus, setOriginalStatus] = useState<Record<string, string>>({});
+
   const [isDataSaved, setIsDataSaved] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -87,6 +91,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
       setIsHoliday(false);
       setHolidayInfo(null);
       setIsEditing(false); // Reset edit mode on date change
+      setOriginalStatus({}); // Clear saved statuses
 
       // --- VALIDASI 1: TANGGAL MASA DEPAN ---
       if (tanggal > todayStr) {
@@ -188,6 +193,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
 
         const currentData = data as Kehadiran[] || [];
         const newFormState: AttendanceFormState = {};
+        const newOriginalState: Record<string, string> = {};
         const hasData = currentData.length > 0;
 
         setIsDataSaved(hasData);
@@ -200,6 +206,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                     status: record.status,
                     catatan: record.catatan || ''
                 };
+                newOriginalState[s.id] = record.status; // Simpan snapshot DB
             } else {
                 newFormState[s.id] = {
                     status: null, 
@@ -209,6 +216,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
         });
 
         setFormData(newFormState);
+        setOriginalStatus(newOriginalState);
 
     } catch (error) {
         console.error(error);
@@ -265,7 +273,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
         if (error) throw error;
 
         showToast(isDataSaved ? '✅ Data diperbarui' : '✅ Data disimpan', 'success');
-        await fetchKehadiran();
+        await fetchKehadiran(); // Ini akan mengupdate originalStatus = formData
     } catch (error) {
         showToast('❌ Gagal menyimpan data', 'error');
     } finally {
@@ -302,13 +310,20 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
 
   const RadioOption = ({ id_siswa, val, label, activeColorClass }: any) => {
       const isChecked = formData[id_siswa]?.status === val;
+      const dbValue = originalStatus[id_siswa];
+      
+      // LOGIC VISUAL:
+      // Tampilkan Ceklis JIKA (Terpilih) DAN (Nilainya Sama dengan Database)
+      // Jika Terpilih tapi Belum Disimpan (berbeda dengan DB atau DB null), tampilkan Label.
+      const isSavedMatch = isChecked && (dbValue === val);
+
       // Disable if: Holiday OR (Data Saved AND Not Editing)
       const isDisabled = isHoliday || (isDataSaved && !isEditing);
 
       return (
           <label className={`
             cursor-pointer flex items-center justify-center w-8 h-8 md:w-10 md:h-10 rounded-lg border-2 transition-all select-none
-            ${isChecked ? `${activeColorClass} border-transparent text-white shadow-md transform scale-110` : 'border-gray-600 text-gray-400 hover:bg-gray-700'}
+            ${isChecked ? `${activeColorClass} border-transparent text-white shadow-md transform scale-110` : 'border-gray-600 text-gray-400 hover:bg-gray-700 bg-gray-800'}
             ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}
           `}>
               <input 
@@ -320,7 +335,12 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                 className="hidden"
                 disabled={isDisabled}
               />
-              <span className="font-bold text-xs md:text-sm">{label}</span>
+              {/* Logic Ikon Ceklis vs Label Huruf */}
+              {isSavedMatch ? (
+                  <span className="text-lg md:text-xl font-bold animate-bounce-in">✓</span>
+              ) : (
+                  <span className="font-bold text-xs md:text-sm">{label}</span>
+              )}
           </label>
       );
   };
@@ -411,11 +431,7 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                        {isDataSaved && isEditing && <span className="ml-3 px-2 py-1 bg-yellow-600 text-white rounded text-xs font-bold animate-pulse">MODE EDIT</span>}
                    </div>
                    <div className="flex gap-2">
-                       {/* BUTTON LOGIC:
-                           If Holiday: ALL DISABLED (Except maybe cancel if editing active, but editing disabled anyway)
-                           Else If Saved & Not Editing: Show Edit/Delete
-                           Else (Not Saved OR Editing): Show Save/Cancel
-                       */}
+                       {/* BUTTON LOGIC */}
                        {isHoliday ? (
                            <span className="text-red-400 text-sm font-bold italic py-2">Input Dikunci</span>
                        ) : isDataSaved && !isEditing ? (
@@ -541,6 +557,17 @@ export const InputKehadiranAdmin: React.FC<Props> = ({ currentUser, showToast })
                </div>
           </div>
       )}
+      
+      {/* Legend Footer for Admin */}
+      <div className="mt-6 flex flex-wrap gap-4 justify-center text-xs text-gray-400 font-medium bg-gray-800 p-3 rounded-lg border border-gray-700">
+         <span className="flex items-center gap-1"><span className="text-white font-bold bg-green-600 px-1.5 rounded">✓</span> Data Tersimpan</span>
+         <span className="flex items-center gap-1"><span className="text-white font-bold bg-green-600 px-1.5 rounded">H</span> Belum Disimpan (Draft)</span>
+         <div className="w-px h-4 bg-gray-600 mx-2 hidden md:block"></div>
+         <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-green-600"></div> H (Hadir)</span>
+         <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-yellow-500"></div> S (Sakit)</span>
+         <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-blue-500"></div> I (Izin)</span>
+         <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-red-500"></div> A (Alpha)</span>
+      </div>
     </div>
   );
 };

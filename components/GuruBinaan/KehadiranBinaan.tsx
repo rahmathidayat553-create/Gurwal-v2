@@ -34,6 +34,10 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   // State UI & Logic
   const [mode, setMode] = useState<ModeType>('INPUT');
   const [formData, setFormData] = useState<FormState>({});
+  
+  // NEW: State untuk menyimpan data asli dari DB (untuk validasi visual Ceklis vs Huruf)
+  const [originalData, setOriginalData] = useState<FormState>({});
+
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -93,6 +97,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
     setMode('INPUT'); 
     setIsHoliday(false);
     setHolidayInfo(null);
+    setOriginalData({}); // Reset original data
 
     try {
       // --- PRIORITY 1: CEK TANGGAL MASA DEPAN ---
@@ -102,8 +107,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
               jenis: 'FUTURE_DATE',
               keterangan: 'Tanggal Masa Depan (Belum dapat diisi)'
           });
-          // Jangan return, tetap fetch data jika ada (walau harusnya kosong) agar UI konsisten
-          // Tapi input tetap disable karena isHoliday=true
       }
 
       // --- PRIORITY 2: CEK HARI SEKOLAH (SENIN-JUMAT / SABTU) ---
@@ -122,8 +125,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       }
 
       if (isWeekend) {
-          // Jika sudah terdeteksi masa depan, biarkan error masa depan prioritas.
-          // Jika tidak, baru set weekend.
           if (tanggal <= todayStr) {
               setIsHoliday(true);
               setHolidayInfo({ 
@@ -142,7 +143,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
           .eq('tanggal', tanggal)
       ];
 
-      // Hanya query kalender jika valid date (bukan masa depan, bukan weekend)
       const shouldCheckCalendar = tanggal <= todayStr && !isWeekend;
 
       if (shouldCheckCalendar) {
@@ -168,6 +168,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       // 3. Handle Data Kehadiran
       const existingData = kehadiranRes.data as Kehadiran[] || [];
       const newFormState: FormState = {};
+      const newOriginalState: FormState = {};
 
       if (existingData.length > 0) {
         // DATA ADA -> MODE VIEW
@@ -176,13 +177,17 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
         siswaList.forEach(item => {
           const record = existingData.find(k => k.id_siswa === item.id_siswa);
           if (record) {
-            newFormState[item.id_siswa] = {
+            const dataPoint = {
               id: record.id,
               status: record.status,
               catatan: record.catatan || ''
             };
+            newFormState[item.id_siswa] = dataPoint;
+            newOriginalState[item.id_siswa] = dataPoint; // Simpan snapshot DB
           } else {
-            newFormState[item.id_siswa] = { status: 'HADIR', catatan: '' };
+            const defaultPoint = { status: 'HADIR' as const, catatan: '' };
+            newFormState[item.id_siswa] = defaultPoint;
+            // Original state kosong untuk siswa ini karena tidak ada di DB
           }
         });
       } else {
@@ -194,6 +199,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       }
 
       setFormData(newFormState);
+      setOriginalData(newOriginalState);
 
     } catch (error) {
       console.error(error);
@@ -206,7 +212,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   // --- Handlers ---
 
   const handleStatusChange = (id_siswa: string, val: 'HADIR' | 'SAKIT' | 'IZIN' | 'ALPHA') => {
-    if (isHoliday) return; // Prevent change if holiday/future
+    if (isHoliday) return;
     setFormData(prev => ({
       ...prev,
       [id_siswa]: { ...prev[id_siswa], status: val }
@@ -214,7 +220,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleCatatanChange = (id_siswa: string, val: string) => {
-    if (isHoliday) return; // Prevent change if holiday/future
+    if (isHoliday) return;
     setFormData(prev => ({
       ...prev,
       [id_siswa]: { ...prev[id_siswa], catatan: val }
@@ -222,7 +228,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleSave = async () => {
-    // VALIDASI FINAL SEBELUM SAVE
     if (isHoliday) {
         showToast(`Gagal: ${holidayInfo?.keterangan || 'Hari Libur / Masa Depan'}.`, 'error');
         return;
@@ -242,7 +247,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       if (error) throw error;
 
       showToast('✅ Kehadiran berhasil disimpan', 'success');
-      await fetchDataAndCheckHoliday(); // Refresh ke mode VIEW
+      await fetchDataAndCheckHoliday();
     } catch (e) {
       showToast('Gagal menyimpan data', 'error');
     } finally {
@@ -251,7 +256,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleUpdate = async () => {
-    // VALIDASI FINAL SEBELUM UPDATE
     if (isHoliday) {
         showToast(`Gagal: ${holidayInfo?.keterangan || 'Hari Libur / Masa Depan'}.`, 'error');
         return;
@@ -259,11 +263,10 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
     setProcessing(true);
     try {
-      // Upsert: Jika ID ada (update), jika tidak (insert - kasus siswa baru)
       const payload = siswaList.map(item => {
         const form = formData[item.id_siswa];
         return {
-          id: form.id, // Supabase Upsert pakai ID ini untuk update
+          id: form.id,
           id_guru: currentUser.id,
           id_siswa: item.id_siswa,
           tanggal: tanggal,
@@ -276,7 +279,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       if (error) throw error;
 
       showToast('✅ Kehadiran berhasil diperbarui', 'success');
-      await fetchDataAndCheckHoliday(); // Kembali ke mode VIEW
+      await fetchDataAndCheckHoliday();
     } catch (e) {
       showToast('Gagal memperbarui data', 'error');
     } finally {
@@ -285,7 +288,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
   };
 
   const handleDelete = async () => {
-    // Validasi Delete: Tidak boleh hapus masa depan (meskipun datanya anehnya ada)
     if (tanggal > todayStr) {
         showToast('Tidak dapat menghapus data masa depan.', 'error');
         return;
@@ -303,7 +305,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
       showToast('🗑️ Data kehadiran dihapus', 'success');
       setShowDeleteConfirm(false);
-      await fetchDataAndCheckHoliday(); // Kembali ke mode INPUT
+      await fetchDataAndCheckHoliday();
     } catch (e) {
       showToast('Gagal menghapus data', 'error');
     } finally {
@@ -315,15 +317,24 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
   const RadioButton = ({ id_siswa, val, label, colorClass }: any) => {
     const isSelected = formData[id_siswa]?.status === val;
-    const isDisabled = mode === 'VIEW' || isHoliday; // Disabled if VIEW mode OR Holiday/Future
+    
+    // Cek apakah data tersimpan di DB sama dengan data UI saat ini
+    const dbStatus = originalData[id_siswa]?.status;
+    const isSavedMatch = dbStatus === val;
+
+    // Logic: Tampilkan ceklis HANYA JIKA terpilih DAN sama dengan database
+    // Jika terpilih tapi belum disimpan (atau diubah), tampilkan Label (Huruf)
+    const showCheckmark = isSelected && isSavedMatch;
+
+    const isDisabled = mode === 'VIEW' || isHoliday;
 
     return (
       <label className={`
-        relative flex items-center justify-center w-10 h-10 rounded-lg transition-all duration-200
+        relative flex items-center justify-center w-10 h-10 rounded-lg transition-all duration-200 shadow-sm
         ${isSelected 
-          ? `${colorClass} text-white shadow-lg scale-110 font-bold ring-2 ring-white` 
-          : 'bg-gray-700 text-gray-400 border border-gray-600'}
-        ${isDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-gray-600'}
+          ? `${colorClass} text-white shadow-md scale-110 ring-2 ring-white ring-opacity-50` 
+          : 'bg-gray-700 text-gray-400 border border-gray-600 hover:bg-gray-600'}
+        ${isDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
       `}>
         <input
           type="radio"
@@ -334,7 +345,12 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
           disabled={isDisabled}
           className="hidden"
         />
-        {label}
+        {/* LOGIC IKON: Jika Tersimpan -> Ceklis. Jika Draft -> Huruf. */}
+        {showCheckmark ? (
+            <span className="text-xl font-bold animate-bounce-in">✓</span>
+        ) : (
+            <span className="font-bold text-sm">{label}</span>
+        )}
       </label>
     );
   };
@@ -366,7 +382,7 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
                     <input
                     type="date"
                     value={tanggal}
-                    max={todayStr} // Prevent selecting future dates via UI
+                    max={todayStr}
                     onChange={(e) => setTanggal(e.target.value)}
                     className="bg-gray-900 border border-gray-600 text-white rounded-lg px-4 py-2 pl-10 focus:ring-2 focus:ring-primary focus:border-transparent shadow-inner"
                     />
@@ -402,8 +418,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
 
             {/* Action Buttons based on Mode */}
             <div className="flex gap-2 w-full lg:w-auto justify-end">
-                
-                {/* 1. Jika Mode INPUT (Belum ada data) */}
                 {mode === 'INPUT' && (
                 <button
                     onClick={handleSave}
@@ -414,12 +428,11 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
                 </button>
                 )}
 
-                {/* 2. Jika Mode VIEW (Data ada, hanya lihat) */}
                 {mode === 'VIEW' && (
                 <>
                     <button
                         onClick={() => setShowDeleteConfirm(true)}
-                        disabled={isHoliday && holidayInfo?.jenis === 'FUTURE_DATE'} // Disable hapus jika future date
+                        disabled={isHoliday && holidayInfo?.jenis === 'FUTURE_DATE'} 
                         className="bg-red-900/50 hover:bg-red-900 text-red-200 border border-red-800 px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         🗑️ Hapus
@@ -435,7 +448,6 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
                 </>
                 )}
 
-                {/* 3. Jika Mode EDIT (Sedang mengedit) */}
                 {mode === 'EDIT' && (
                 <>
                     <button
@@ -576,7 +588,10 @@ export const KehadiranBinaan: React.FC<Props> = ({ currentUser, showToast }) => 
       </div>
       
       {/* Legend */}
-      <div className="mt-4 flex gap-6 justify-center text-xs text-gray-400 font-medium">
+      <div className="mt-4 flex flex-wrap gap-4 justify-center text-xs text-gray-400 font-medium bg-gray-800 p-3 rounded-lg border border-gray-700">
+         <span className="flex items-center gap-1"><span className="text-white font-bold bg-green-600 px-1.5 rounded">✓</span> Data Tersimpan</span>
+         <span className="flex items-center gap-1"><span className="text-white font-bold bg-green-600 px-1.5 rounded">H</span> Belum Disimpan (Draft)</span>
+         <div className="w-px h-4 bg-gray-600 mx-2 hidden md:block"></div>
          <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-green-600"></div> H (Hadir)</span>
          <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-yellow-500"></div> S (Sakit)</span>
          <span className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-blue-500"></div> I (Izin)</span>
