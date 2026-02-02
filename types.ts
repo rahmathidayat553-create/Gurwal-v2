@@ -91,6 +91,7 @@ export interface Nilai {
   id_mapel: string;
   jenis: 'FORMATIF' | 'SUMATIF' | 'AKHIR_SUMATIF';
   nilai: number;
+  materi?: string; // Atribut Baru
   tanggal: string;
   siswa?: Siswa;
 }
